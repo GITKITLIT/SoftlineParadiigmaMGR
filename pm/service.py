@@ -2,12 +2,11 @@ import json
 import os
 from pathlib import Path
 from datetime import date, datetime, timezone
-from statistics import mean
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .analytics import WEEK, change, day, finite, weeks
+from .analytics import WEEK, compare_series, day, finite, reach_summary, weeks
 from .settings import ROOT, workbook_case
 
 
@@ -21,11 +20,13 @@ def overview():
     snapshot = json.loads(path.read_text(encoding="utf-8-sig"))
     if external and os.getenv("PM_CASE_CONFIG"):
         snapshot.setdefault("release_id", workbook_case()["release_id"])
-    return snapshot
+    for key, value in reach_summary(snapshot["reach"]).items():
+        snapshot.setdefault(key, value)
+    return recalculate(snapshot, {})
 
 
 def recalculate(snapshot, values):
-    cfg = snapshot["config"]
+    cfg = snapshot["config"].copy()
     keys = (
         "before_start",
         "before_end",
@@ -38,29 +39,22 @@ def recalculate(snapshot, values):
     a, b, c, d = (day(cfg[k]) for k in keys[:4])
     base, post = weeks(a, b), weeks(c, d)
     launch = day(snapshot["launch"])
-    if b + WEEK > launch or c <= launch or d >= day(cfg["partial_week"]):
+    partial = day(cfg["partial_week"])
+    extended = weeks(c, partial)
+    if b + WEEK > launch or c <= launch or d >= partial:
         raise ValueError("В основное окно попали неделя запуска или неполная неделя")
-    idx = {"orders_index": 1, "orders_index_4w": 2}.get(cfg["metric"])
-    if idx is None or not 0 <= finite(cfg["alert_percent"]) <= 100:
+    if (
+        cfg["metric"] not in ("orders_index", "orders_index_4w")
+        or finite(cfg["alert_percent"]) > 100
+    ):
         raise ValueError("Проверьте метрику и порог")
-    for s in snapshot["series"]:
-        points = {day(v[0]): v for v in s["points"]}
-
-        def avg(ds, col):
-            if any(w not in points or points[w][col] is None for w in ds):
-                raise ValueError("Выбранное окно содержит пропуски")
-            return mean(finite(points[w][col]) for w in ds)
-
-        before, after = avg(base, idx), avg(post, idx)
-        ext = avg(weeks(c, day(cfg["partial_week"])), idx)
-        s.update(
-            before=before,
-            after=after,
-            extra=ext,
-            delta=change(before, after),
-            extra_delta=change(before, ext),
-            rolling_base=avg(base, 2),
-        )
+    summaries = [
+        compare_series(series["points"], base, post, extended, cfg["metric"])
+        for series in snapshot["series"]
+    ]
+    snapshot["config"].update(cfg)
+    for series, summary in zip(snapshot["series"], summaries):
+        series.update(summary)
     return snapshot
 
 
