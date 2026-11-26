@@ -9,8 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from pm import ai_store, investigation
 from pm.analytics import compile_book, effect, finite
-from pm.research import analyze, evidence, index_range, search, sources
+from pm.research import evidence, index_range, search, sources
 from pm.settings import ROOT, private_dir
 from pm.service import metrika, overview, recalculate
 
@@ -84,9 +85,17 @@ def api(route, b):
     if route == "/api/import":
         return local_doc(b)
     if route == "/api/analyze":
-        return analyze(
-            str(b["query"])[:500], recalculate(overview(), b.get("config", {}))
-        )
+        return investigation.analyze(b)
+    if route == "/api/analysis/report":
+        return ai_store.run(b["run_id"])
+    if route == "/api/analysis/journal":
+        return {"runs": ai_store.recent()}
+    if route == "/api/tasks":
+        return {"tasks": ai_store.task_list()}
+    if route == "/api/tasks/decide":
+        return ai_store.decide(b)
+    if route == "/api/tasks/review":
+        return ai_store.review(b)
     if route == "/api/metrika":
         return metrika(b["start"], b["end"])
     if route == "/api/effect":
