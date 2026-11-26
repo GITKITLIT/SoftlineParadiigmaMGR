@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<yandexsearch version="1.0">
+  <request><query>site:example.com "Демо Pro" лицензия</query></request>
+  <response>
+    <found priority="all">1</found>
+    <results>
+      <grouping>
+        <group>
+          <doc id="synthetic-1">
+            <url>https://example.com/demo-pro</url>
+            <domain>example.com</domain>
+            <title>Демо Pro · синтетический пример</title>
+            <passages>
+              <passage>Подбор лицензии: 1 устройство, 12 месяцев. Путь покупки: выбор лицензии перед корзиной.</passage>
+            </passages>
+          </doc>
+        </group>
+      </grouping>
+    </results>
+  </response>
+</yandexsearch>
