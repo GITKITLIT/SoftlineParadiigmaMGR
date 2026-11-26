@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -177,6 +178,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("Требуется объект")
             result = api(urlsplit(self.path).path, body)
+        except sqlite3.Error:
+            status = 503
+            result = {"error": "Локальное хранилище временно недоступно."}
         except (ValueError, KeyError, TypeError, OSError, IndexError) as error:
             status = 400
             result = {
@@ -202,8 +206,10 @@ def main():
     build.add_argument("--config")
     build.add_argument("--output", default="build/index.html")
     imp = subs.add_parser("import")
-    for opt in ("file", "sheet", "range", "kind"):
-        imp.add_argument("--" + opt, required=True)
+    imp.add_argument("--file", required=True, type=Path)
+    imp.add_argument("--kind", required=True)
+    imp.add_argument("--sheet")
+    imp.add_argument("--range")
     args = p.parse_args()
     if args.cmd == "serve":
         if args.workbook:
@@ -221,7 +227,21 @@ def main():
                 if worker:
                     worker.join(timeout=6)
     elif args.cmd == "import":
-        print("Добавлено:", index_range(args.file, args.sheet, args.range, args.kind))
+        extension = args.file.suffix.casefold()
+        if extension == ".txt":
+            if args.file.stat().st_size > 120_000:
+                p.error("Выберите текстовый файл до 120 КБ.")
+            result = local_doc({
+                "name": args.file.name, "text": args.file.read_text(encoding="utf-8-sig"),
+                "kind": args.kind,
+            })
+            print("Добавлено:", result["added"])
+        elif extension in (".xlsx", ".xlsm"):
+            if not args.sheet or not args.range:
+                p.error("Укажите --sheet и --range для Excel.")
+            print("Добавлено:", index_range(args.file, args.sheet, args.range, args.kind))
+        else:
+            p.error("Поддерживаются TXT UTF-8 и таблицы XLSX/XLSM.")
     else:
         dest = Path(args.output).resolve()
         has_private_inputs = args.workbook or any(

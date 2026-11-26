@@ -3,10 +3,13 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime, timezone
+from html import unescape
+from itertools import zip_longest
 from urllib.parse import urlsplit
 
 from .analytics import day, weeks
-from .research import search, sources
+from .research import search, sources, tokens
 from .service import metrika
 
 TOPICS = {"pricing", "licensing", "checkout", "product_features", "support"}
@@ -23,6 +26,15 @@ def allowlist(name):
     return set()
 
 
+def allowed_domain(value):
+    if not isinstance(value, str) or len(value) > 253:
+        return False
+    labels = value.split(".")
+    return (len(labels) >= 2 and labels[-1] not in {"internal", "local", "localhost", "test", "invalid"}
+            and not labels[-1].isdigit()
+            and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", name) for name in labels))
+
+
 def public_search(request, collector=None):
     if os.getenv("YANDEX_SEARCH_ENABLED", "").lower() != "true":
         return "disabled", "configuration_disabled", []
@@ -36,7 +48,7 @@ def public_search(request, collector=None):
     valid = (
         isinstance(product, str) and product in allowed_products
         and isinstance(domains, list) and 0 < len(domains) <= 10
-        and all(isinstance(x, str) and x in allowed_domains for x in domains)
+        and all(allowed_domain(x) and x in allowed_domains for x in domains)
         and isinstance(topics, list) and 0 < len(topics) <= len(TOPICS)
         and all(isinstance(x, str) and x in TOPICS for x in topics)
     )
@@ -84,12 +96,36 @@ def normalize_web(item, domains, product, topics):
             or not re.fullmatch(r"web:[\w.-]{1,100}", item["id"])
         ):
             return None
-        return entry(item["id"], "competitor_web", item["title"], item["text"],
+        title = web_text(item["title"])
+        text = web_text(item["text"])
+        if not title or not text:
+            return None
+        return entry(item["id"], "competitor_web", title, text,
                      mode="public", quality=item["content_type"], locator=item["url"],
-                     observed_at=item.get("published_at"), retrieved_at=item.get("retrieved_at"),
+                     observed_at=utc(item.get("published_at")), retrieved_at=utc(item.get("retrieved_at")),
                      topic=item["topic"])
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
+
+
+def utc(value):
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).isoformat()
+    except ValueError:
+        pass
+    return None
+
+
+def web_text(value):
+    if not isinstance(value, str):
+        return ""
+    text = unescape(value[:2500])
+    text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", text, flags=re.I | re.S)
+    return " ".join(re.sub(r"<[^>]{0,500}>", " ", text).split())
 
 
 def clean(value, size):
@@ -154,6 +190,34 @@ def collect(query, snapshot, request, *, collector=None, meter=metrika):
         if backlog["id"] != snapshot.get("release_task"):
             limits.append("Найденная задача отличается от указанной связи релиза. Проверьте связь перед созданием дубля.")
 
+    begin, end = day(before[0]), day(after[1])
+    release_ids = set()
+    for row in snapshot.get("release_history", [])[:12]:
+        try:
+            released = day(row["date"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if (begin <= released <= end and row.get("id")
+                and row["id"] not in release_ids and row["id"] != snapshot.get("release_id")):
+            release_ids.add(row["id"])
+            evidence.append(entry(f"release:nearby:{len(release_ids)}", "release", row["id"],
+                                  row.get("title", ""), mode=mode, observed_at=released.isoformat(),
+                                  values={"related_task": row.get("related_task")}))
+        if len(release_ids) == 3:
+            break
+    if release_ids:
+        limits.append("В сравниваемых окнах есть другие релизы. Их влияние требует отдельной проверки.")
+
+    query_terms = tokens(query)
+    for row in snapshot.get("backlog_history", [])[:200]:
+        title = row.get("title", "")
+        if row.get("id") and query_terms & tokens(title) and not any(x["id"] == row["id"] for x in matches):
+            matches.append({k: row.get(k) for k in ("id", "title", "status")})
+            evidence.append(entry(f"backlog:match:{len(matches)}", "backlog", row["id"],
+                                  title, mode=mode, values={"status": row.get("status")}))
+        if len(matches) >= 4:
+            break
+
     corpus = sources()
     if mode == "local" and not os.getenv("PM_EVIDENCE"):
         from .research import evidence as default_evidence
@@ -205,7 +269,8 @@ def collect(query, snapshot, request, *, collector=None, meter=metrika):
                        if key in provenance}
         local_hits.append(entry(identifier, kind, ref, item["text"], mode=item_mode,
                                 locator=locator, quality="excerpt"))
-    for item in local_hits + web:
+    interleaved = (item for pair in zip_longest(local_hits, web) for item in pair if item)
+    for item in interleaved:
         normalized = " ".join(item["text"].casefold().split())
         if not normalized or normalized in seen_text or item["id"] in seen_ids:
             continue

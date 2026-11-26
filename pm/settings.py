@@ -34,4 +34,7 @@ def workbook_case():
 
 def private_dir():
     path = os.getenv("PM_PRIVATE_DIR")
-    return Path(path).expanduser() if path else Path.home() / ".paradiigmamgr"
+    directory = (Path(path).expanduser() if path else Path.home() / ".paradiigmamgr").resolve()
+    if directory.is_relative_to(ROOT):
+        raise ValueError("Укажите PM_PRIVATE_DIR за пределами рабочей копии")
+    return directory

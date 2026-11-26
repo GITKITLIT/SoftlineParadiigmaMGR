@@ -8,11 +8,11 @@ from .metrika import metrika
 from .settings import ROOT, workbook_case
 
 
-def overview():
+def overview(*, for_analysis=False):
     from .analytics import compile_book
 
     if os.getenv("PM_WORKBOOK"):
-        return compile_book(os.environ["PM_WORKBOOK"])
+        return compile_book(os.environ["PM_WORKBOOK"], for_analysis=for_analysis)
     external = os.getenv("PM_SNAPSHOT")
     path = Path(external) if external else ROOT / "data/demo-overview.json"
     snapshot = json.loads(path.read_text(encoding="utf-8-sig"))

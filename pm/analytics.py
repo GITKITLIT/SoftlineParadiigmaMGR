@@ -42,7 +42,7 @@ def change(before, after):
     return 100 * (after / before - 1) if before else None
 
 
-def compile_book(path, config=None, source="Локальная выгрузка"):
+def compile_book(path, config=None, source="Локальная выгрузка", *, for_analysis=False):
     case = workbook_case()
     cfg = DEFAULT | case["periods"] | (config or {})
     if set(cfg) != set(DEFAULT) or cfg["metric"] not in (
@@ -90,6 +90,8 @@ def compile_book(path, config=None, source="Локальная выгрузка"
 
             def average(dates, metric):
                 if any(d not in by_date or by_date[d][metric] is None for d in dates):
+                    if for_analysis:
+                        return None
                     raise ValueError(f"Неполное окно по {family} / {metric}")
                 return mean(finite(by_date[d][metric]) for d in dates)
 
@@ -98,7 +100,9 @@ def compile_book(path, config=None, source="Локальная выгрузка"
             extended = average(weeks(post, partial), metric)
             rolling_base = average(base, "orders_index_4w")
             points = [
-                [d.isoformat(), finite(r["orders_index"]), r["orders_index_4w"]]
+                [d.isoformat(),
+                 None if for_analysis and r["orders_index"] is None else finite(r["orders_index"]),
+                 r["orders_index_4w"]]
                 for d, r in sorted(by_date.items())
                 if d <= partial
             ]
@@ -108,8 +112,8 @@ def compile_book(path, config=None, source="Локальная выгрузка"
                     before=before,
                     after=main,
                     extra=extended,
-                    delta=change(before, main),
-                    extra_delta=change(before, extended),
+                    delta=change(before, main) if main is not None else None,
+                    extra_delta=change(before, extended) if extended is not None else None,
                     rolling_base=rolling_base,
                     points=points,
                 )
@@ -140,7 +144,7 @@ def compile_book(path, config=None, source="Локальная выгрузка"
             reach[device] = dict(
                 num=num, den=den, days=len(seen), total=(re - rs).days + 1
             )
-        return dict(
+        snapshot = dict(
             source=source,
             config=cfg,
             launch=launch.isoformat(),
@@ -150,6 +154,27 @@ def compile_book(path, config=None, source="Локальная выгрузка"
             release_task=release["related_task_ids"],
             backlog=dict(id=case["backlog_id"], title=task["title"], status=task["status"]),
         )
+        if for_analysis:
+            snapshots = []
+            for key, row in releases.items():
+                try:
+                    released = day(row.get("release_date"))
+                except ValueError:
+                    continue
+                if start <= released <= partial and key and key != case["release_id"]:
+                    snapshots.append(dict(id=str(key), date=released.isoformat(),
+                                          title=str(row.get("title") or row.get("release_name") or "")[:180],
+                                          related_task=row.get("related_task_ids")))
+            snapshots.sort(key=lambda row: (abs(day(row["date"]) - launch), row["id"]))
+            snapshot.update(
+                channel=case["channel"],
+                release_history=snapshots[:12],
+                backlog_history=[
+                    {"id": str(key), "title": str(row.get("title") or "")[:180], "status": row.get("status")}
+                    for key, row in tasks.items() if key and key != case["backlog_id"]
+                ][:200],
+            )
+        return snapshot
     finally:
         book.close()
 

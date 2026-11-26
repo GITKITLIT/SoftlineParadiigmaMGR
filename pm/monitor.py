@@ -1,6 +1,7 @@
 """In-process periodic comparison. All scheduled work stays local."""
 import hashlib
 import os
+import sqlite3
 import threading
 
 from . import ai_store
@@ -48,8 +49,11 @@ def start(seconds):
         while not stop.wait(seconds):
             try:
                 check({})
-            except (OSError, ValueError, KeyError, TypeError, IndexError):
-                ai_store.record_check("scheduled", "error", None)
+            except (OSError, ValueError, KeyError, TypeError, IndexError, sqlite3.Error):
+                try:
+                    ai_store.record_check("scheduled", "error", None)
+                except (OSError, sqlite3.Error):
+                    continue
 
     worker = threading.Thread(target=loop, name="local-monitor", daemon=True)
     worker.start()

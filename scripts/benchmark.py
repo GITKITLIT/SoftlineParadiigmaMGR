@@ -26,7 +26,7 @@ req = Request(
 with urlopen(req, timeout=180) as stream:
     r = json.load(stream)
 elapsed = perf_counter() - start
-if not r.get("model") or "usage" not in r:
+if not r.get("model") or not all(k in r for k in ("usage", "hypothesis", "proposal", "refs")):
     raise SystemExit("Полный вызов модели не подтверждён: " + str(r.get("notice")))
 record = {k: r[k] for k in ("mode", "model", "hypothesis", "proposal", "refs", "usage")}
 record.update(

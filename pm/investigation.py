@@ -14,7 +14,7 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
-    snapshot = recalculate(overview(), config, allow_partial=True)
+    snapshot = recalculate(overview(for_analysis=True), config, allow_partial=True)
     partial_sales = any(
         item["before"] is None or item["after"] is None for item in snapshot["series"]
     )
@@ -49,7 +49,7 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
         summary = "Снижение среднего индекса достигло порога. Причина требует проверки."
     else:
         summary = "Снижение среднего индекса не достигло заданного порога."
-    if not hypotheses and core and core["values"]["delta"] is not None and core["values"]["delta"] < 0:
+    if status != "ok" and not hypotheses and core and core["values"]["delta"] is not None and core["values"]["delta"] < 0:
         hypotheses = [dict(
             problem="Снижение индекса заказов", cause="Изменение поведения или измерения требует проверки",
             verify="Сопоставить шаги покупки и регистрацию событий по сегментам до изменения",
@@ -83,7 +83,9 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
         recommended_actions=[h["verify"] for h in hypotheses] or ["Проверить полноту входных данных."],
         backlog_matches=matches, proposed_tasks=proposals, effect_plan=effect_plan, limitations=limits,
         trace=[dict(step="collect", seconds=round(gathered, 3)),
-               dict(step="qwen", seconds=round(elapsed - gathered, 3), status=status, reason=reason)],
+               dict(step="qwen", seconds=round(elapsed - gathered, 3), status=status,
+                    reason=reason if status != "ok" else None,
+                    selected_step=reason if status == "ok" else None)],
         usage=usage, seconds=round(elapsed, 3), checks=["checkout", "tracking"],
         hits=[item for item in evidence if item["kind"] in
               {"research", "interview", "competitor_local", "competitor_web"}],

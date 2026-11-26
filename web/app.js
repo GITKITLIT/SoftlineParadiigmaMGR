@@ -83,6 +83,10 @@ function drawChart() {
     svg.append(e);
   }
   const all = data.series.flatMap((s) => s.points);
+  if (new Set(all.map((point) => point[0])).size < 2) {
+    $("#chart").replaceChildren(node("p", "Недостаточно недель для графика."));
+    return;
+  }
   const max = Math.max(
     50,
     Math.ceil(
@@ -179,7 +183,9 @@ function render() {
       dateRu(c.after_end);
   text("#source", data.source + " · недельные индексы");
   text("#release", [data.release_id, "Запуск " + dateRu(data.launch)].filter(Boolean).join(" · "));
-  text("#legend", "Синий — " + data.series[0].name + ", оранжевый — " + data.series[1].name + ".");
+  const comparison = data.series[1]?.name;
+  text("#legend", "Синий — " + data.series[0].name +
+    (comparison ? ", оранжевый — " + comparison + "." : ". Контрольной группы нет."));
   text(
     "#period",
     (c.metric === "orders_index"
@@ -223,7 +229,8 @@ function render() {
   const delta = data.series[0].delta;
   text(
     "#signal",
-    delta != null && delta < 0 && -delta >= c.alert_percent
+    delta == null ? "Недостаточно данных для проверки порога." :
+    delta < 0 && -delta >= c.alert_percent
       ? "Сигнал · снижение превысило или достигло порога " +
           c.alert_percent +
           "%. Причина требует проверки."
@@ -739,7 +746,7 @@ async function evaluateEffect() {
             " · " + data.series[1].name + " " +
             fmt(r.astra) +
             " (база " +
-            fmt(record.baseline[1].rolling) +
+            fmt(record.baseline[1]?.rolling) +
             ")" +
             (r.before_fix
               ? " · предыдущие четыре полные недели: " + data.series[0].name + " " +

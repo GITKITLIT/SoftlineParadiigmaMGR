@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from .settings import ROOT, private_dir
+from .settings import private_dir
 
 TASK_TAG = "сгенерирована ИИ-помощником"
 
@@ -19,9 +19,7 @@ def now():
 
 @contextmanager
 def database():
-    path = (private_dir() / "ai.sqlite3").resolve()
-    if path.is_relative_to(ROOT):
-        raise ValueError("Укажите PM_PRIVATE_DIR за пределами рабочей копии")
+    path = private_dir() / "ai.sqlite3"
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=5, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -214,7 +212,10 @@ def public_report(run_id):
     return {
         "llm_status": report["llm_status"], "data_mode": report["data_mode"],
         "sources": {key: value["status"] for key, value in report["sources_status"].items()},
-        "hypothesis_count": len(report["hypotheses"]),
+        **({"hypothesis_count": len(report["hypotheses"])}
+           if report["data_mode"] == "synthetic"
+           and not any(item["data_mode"] in {"local", "store_counter"} for item in report["evidence"])
+           else {}),
     }
 
 
