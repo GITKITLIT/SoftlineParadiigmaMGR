@@ -1,1 +1,47 @@
-# SoftlineParadiigmaMGR
+# ParadiigmaMGR
+
+Локальный помощник продакт-менеджера. Демоверсия использует синтетические индексы, задачи и примеры источников.
+
+## Запуск
+
+Нужен Python 3.11 или новее. В Windows можно запустить `START_WINDOWS.cmd` либо выполнить в PowerShell из корня проекта:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe scripts/cost.py
+.\.venv\Scripts\python.exe app.py serve
+```
+
+На macOS и Linux используйте `python3 -m venv .venv`, затем `.venv/bin/python` в тех же командах. Откройте `http://127.0.0.1:8080/`. Порт можно изменить через `--port`.
+
+Для автономного отчёта выполните `python app.py build` и откройте `build/index.html`. В нём доступны график, демонстрационные источники, локальный поиск по ним и черновики браузера. Пересчёт, импорт, оценка эффекта, Метрика и модель требуют локального сервера.
+
+## Локальные данные и интеграции
+
+Переменные перечислены в `.env.example`. Перед запуском задайте нужные переменные в процессе оболочки, например `$env:PM_SNAPSHOT = 'C:/local-data/overview.json'` в PowerShell. Приложение читает окружение процесса. Храните закрытые файлы и секреты за пределами рабочей копии.
+
+- `PM_SNAPSHOT` читает готовый JSON-снимок. Формат показан в `data/demo-overview.json`. `PM_WORKBOOK` или `app.py serve --workbook PATH` включает расчёт из Excel. Для исходного набора задайте `PM_CASE_CONFIG` с полями `release_id`, `backlog_id`, `families` (две семьи по порядку), `channel`, `reach_product` и `periods` (даты из поля `config` исходного снимка). Пример структуры есть в `pm/settings.py`, пример книги создаёт `scripts/demo_workbook.py`.
+- `PM_EVIDENCE` задаёт локальный корпус в формате `data/demo-evidence.json`. Материалы можно добавить через интерфейс или командой `python app.py import --file PATH --sheet SHEET --range A1:C3 --kind Интервью`. Индекс сохраняется в `PM_PRIVATE_DIR` или в `~/.paradiigmamgr` по умолчанию.
+- `PM_LLM_URL` задаёт loopback-адрес API модели, например `http://127.0.0.1:18081/v1`. `PM_LLM_PROMPT_FILE` указывает на локальный файл системной инструкции UTF-8. Модель возвращает одну гипотезу в форме вопроса и идентификаторы подтверждающих источников по схеме запроса. `scripts/run_model.py --help` описывает локальный запуск Qwen3-4B с llama.cpp. `PM_BENCHMARK` позволяет показать сохранённый результат `scripts/benchmark.py`.
+- `METRIKA_COUNTER_ID` и `METRIKA_TOKEN` задаются на сервере. Интерфейс запрашивает число визитов за выбранный период. Без настроек отображается сообщение о подключении.
+- `scripts/new_weeks.py --help` описывает экспорт недель из Excel для оценки эффекта. Формат JSON показан в `data/effect-demo.json`. Поля `kaspersky` и `astra` обозначают первую и вторую семьи соответственно и сохранены для совместимости.
+- При сборке отчёта с закрытыми входными файлами укажите `--output` за пределами репозитория. Готовый HTML содержит данные, использованные при сборке. Калькулятор стоимости генерируется командой `python scripts/cost.py`. Для замера модели используйте `--benchmark PATH`; стандартный калькулятор использует условные числа.
+
+## Проверки
+
+```text
+python -m unittest discover -s tests -v
+node --check web/app.js
+python -m pip install playwright
+python -m playwright install chromium
+python scripts/qa_browser.py
+```
+
+Для теста с установленным Chrome можно задать `PM_CHROMIUM` полным путём к браузеру.
+
+## Происхождение и использование ИИ
+
+Основа этой ветки — существующий командный прототип ParadiigmaMGR. Codex использован для анализа вариантов, переноса и очистки кода, подготовки синтетических данных, инструкции и проверок. При запуске продукт опционально использует Qwen3-4B через llama.cpp. Python, openpyxl и XlsxWriter используются в приложении, Playwright используется в браузерной проверке.
+
+При заполнении заявки укажите стек, модели, объём реализации в спринте и использованные наработки согласно пунктам 4.5(2) и 4.8. [Положение конкурса «ИИкузница»](https://xn--80ancabkw0c4a.xn--p1ai/regulations/v1.html)

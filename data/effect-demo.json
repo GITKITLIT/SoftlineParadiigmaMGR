@@ -1,0 +1,59 @@
+{
+  "fix": "2025-04-09",
+  "rows": [
+    {
+      "week": "2025-03-10",
+      "complete": true,
+      "kaspersky": 70,
+      "astra": 95
+    },
+    {
+      "week": "2025-03-17",
+      "complete": true,
+      "kaspersky": 70,
+      "astra": 95
+    },
+    {
+      "week": "2025-03-24",
+      "complete": true,
+      "kaspersky": 70,
+      "astra": 95
+    },
+    {
+      "week": "2025-03-31",
+      "complete": true,
+      "kaspersky": 70,
+      "astra": 95
+    },
+    {
+      "week": "2025-04-07",
+      "complete": true,
+      "kaspersky": 70,
+      "astra": 95
+    },
+    {
+      "week": "2025-04-14",
+      "complete": true,
+      "kaspersky": 105,
+      "astra": 95
+    },
+    {
+      "week": "2025-04-21",
+      "complete": true,
+      "kaspersky": 115,
+      "astra": 95
+    },
+    {
+      "week": "2025-04-28",
+      "complete": true,
+      "kaspersky": 125,
+      "astra": 95
+    },
+    {
+      "week": "2025-05-05",
+      "complete": true,
+      "kaspersky": 135,
+      "astra": 95
+    }
+  ]
+}
