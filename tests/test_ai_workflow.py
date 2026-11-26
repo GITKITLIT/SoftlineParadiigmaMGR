@@ -128,3 +128,30 @@ class InvestigationTests(unittest.TestCase):
         self.assertNotIn("private", safe_locator("C:/private/book.xlsx · A1"))
         with patch.dict(os.environ, {"PM_LLM_URL": "http://example.com/v1"}):
             self.assertEqual(qwen.infer("query", [])[3], "invalid_configuration")
+
+
+    def test_partial_and_zero_sales_keep_null(self):
+        snapshot = json.loads((ROOT / "data/demo-overview.json").read_text(encoding="utf8"))
+        points = snapshot["series"][0]["points"]
+        points[:] = [row for row in points if row[0] != snapshot["config"]["after_start"]]
+        snapshot["series"][1]["points"] = [
+            [day, 0 if day <= snapshot["config"]["before_end"] else weekly, rolling]
+            for day, weekly, rolling in snapshot["series"][1]["points"]
+        ]
+        path = Path(self.folder) / "snapshot.json"
+        path.write_text(json.dumps(snapshot), encoding="utf8")
+        with patch.dict(os.environ, {"PM_SNAPSHOT": str(path)}):
+            report = investigation.analyze({"query": "падение"})
+        self.assertEqual(report["sources_status"]["sales"]["status"], "partial")
+        self.assertIsNone(report["evidence"][0]["values"]["after"])
+        self.assertEqual(report["evidence"][1]["values"]["before"], 0)
+        self.assertIsNone(report["evidence"][1]["values"]["delta"])
+
+    def test_monitor_and_metadata_export(self):
+        from pm import monitor
+
+        self.assertTrue(monitor.check({})["notification"])
+        self.assertFalse(monitor.check({})["notification"])
+        report = investigation.analyze({"query": "private phrase"})
+        self.assertNotIn("private phrase", json.dumps(ai_store.public_report(report["run_id"])))
+        self.assertNotIn("evidence", ai_store.public_report(report["run_id"]))

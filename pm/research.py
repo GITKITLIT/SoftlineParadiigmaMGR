@@ -49,6 +49,7 @@ def index_range(path, sheet, area, kind, target=None):
                         dict(
                             id=hashlib.sha256(ref.encode()).hexdigest()[:18],
                             ref=ref,
+                            locator={"file": Path(path).name, "sheet": sheet, "cell": cell.coordinate},
                             kind=kind,
                             text=s.strip()[:2000],
                         )
@@ -89,10 +90,18 @@ def tokens(text):
 
 def search(query, items):
     words = tokens(query)
-    scored = [
-        (len(words & tokens(x["text"] + " " + x["kind"] + " " + x["ref"])), i, x)
-        for i, x in enumerate(items)
-    ]
+    related = (("корзина", "checkout", "оформление", "покупка"),
+               ("лицензия", "license", "подписка"),
+               ("интервью", "респондент", "исследование"),
+               ("событие", "аналитика", "метрика"))
+    expanded = set().union(*(tokens(" ".join(group)) for group in related
+                             if words & tokens(" ".join(group)))) - words
+    scored = []
+    for i, item in enumerate(items):
+        content = tokens(item["text"] + " " + item["kind"] + " " + item["ref"])
+        score = 2 * len(words & content) + len(expanded & content)
+        if score:
+            scored.append((score, i, item))
     return [x for score, _, x in sorted(scored, key=lambda v: (-v[0], v[1])) if score][
         :12
     ]

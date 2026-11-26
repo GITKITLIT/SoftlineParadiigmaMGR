@@ -14,20 +14,14 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
-    snapshot = overview()
-    partial_sales = False
-    try:
-        snapshot = recalculate(snapshot, config)
-    except ValueError as error:
-        if "содержит пропуски" not in str(error):
-            raise
-        partial_sales = True
-        for item in snapshot["series"]:
-            item.update(before=None, after=None, delta=None, rolling_base=None)
+    snapshot = recalculate(overview(), config, allow_partial=True)
+    partial_sales = any(
+        item["before"] is None or item["after"] is None for item in snapshot["series"]
+    )
     mode, evidence, statuses, limits, matches = collect(query, snapshot, request, collector=collector)
     if partial_sales:
         statuses["sales"] = {"status": "partial", "reason": "missing_weeks"}
-        limits.append("В запрошенных периодах есть пропуски. Индексы не рассчитаны.")
+        limits.append("В запрошенных периодах есть пропуски. Показатели с пропусками исключены из сравнения.")
     gathered = time.perf_counter() - started
     findings = []
     for item in evidence:
@@ -37,6 +31,14 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
                 text=f'{item["ref"]} — изменение среднего индекса {delta:+.1f}%',
                 evidence_ids=[item["id"]], contradictions=[], missing=[],
                 confidence="medium",
+            ))
+        if item["kind"] == "funnel" and item["values"]["rate"] is not None:
+            values = item["values"]
+            findings.append(dict(
+                text=f'{item["filter"]["segment"]} · выбор опции {values["rate"]:.1f}%, покрытие {values["days"]}/{values["total"]} дней',
+                evidence_ids=[item["id"]], contradictions=[],
+                missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
+                confidence="low" if item["quality"] == "incomplete" else "medium",
             ))
     status, hypotheses, usage, reason = infer(query, evidence)
     core = next((item for item in evidence if item["kind"] == "orders"), None)

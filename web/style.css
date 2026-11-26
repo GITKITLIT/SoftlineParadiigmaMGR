@@ -247,3 +247,10 @@ summary:focus-visible {
     font-size: 2rem;
   }
 }
+
+#agent { margin-block: 1.3rem; padding-block-start: .8rem; border-top: 1px solid #d9e5e3; }
+#agent input[type="checkbox"] { width: auto; }
+#agent section { margin-block: 1rem; }
+#agent article, #agent form { margin-block: .7rem; padding: .6rem .85rem; border: 1px solid #d9e5e3; border-radius: .5rem; }
+#agent a, #agent strong { overflow-wrap: anywhere; }
+#agent button { margin: .25rem .35rem .25rem 0; }

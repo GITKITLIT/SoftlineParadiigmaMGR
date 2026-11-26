@@ -441,10 +441,19 @@ $("#infer").onclick = async (e) => {
   const ai = $("#ai");
   ai.textContent = "Идёт подбор источников и проверок…";
   try {
-    const res = await api("analyze", {
+    renderInvestigation(null);
+    const request = {
       query: $("#search").elements.query.value,
       config: data.config,
-    });
+    };
+    if ($("#includeMeter").checked) request.metrika = values($("#meter"));
+    if ($("#publicProduct").value) {
+      const selected = (id) => Array.from($(id).selectedOptions, (o) => o.value);
+      request.web = { product: $("#publicProduct").value,
+        domains: selected("#publicDomains"), topics: selected("#publicTopics") };
+    }
+    const res = await api("analyze", request);
+    renderInvestigation(res);
     showHits(res.hits);
     proposal = res.hypothesis || res.proposal || "";
     proof = res.refs || [];
@@ -459,15 +468,221 @@ $("#infer").onclick = async (e) => {
       .join(" · ");
     for (const id of proof) {
       const link = node("a", " [" + id + "]");
-      link.href = "#src-" + id;
+      link.href = "#evidence-" + encodeURIComponent(id);
       ai.append(link);
     }
   } catch (err) {
     ai.textContent = err.message;
+    text("#runSummary", "Расследование не завершено.");
   } finally {
     e.target.disabled = false;
   }
 };
+function renderInvestigation(report) {
+  const container = $("#runDetails");
+  container.replaceChildren();
+  text("#runSummary", report ? report.summary : "Собираем доказательства…");
+  if (!report) return;
+  const status = { ok: "доступен", partial: "частично", disabled: "выключен",
+    missing: "нет данных", unavailable: "недоступен", error: "ошибка" };
+  const section = (heading) => {
+    const block = node("section", "");
+    block.append(node("h4", heading));
+    container.append(block);
+    return block;
+  };
+  const sourceBlock = section("Доступность источников");
+  const labels = {sales: "Продажи", research: "Исследования", release: "Релиз",
+    backlog: "Бэклог", competitor_web: "Конкуренты в интернете",
+    competitor_local: "Локальные данные о конкурентах", metrika: "Яндекс.Метрика"};
+  for (const [name, value] of Object.entries(report.sources_status)) {
+    sourceBlock.append(node("p", (labels[name] || name) + " · " + (status[value.status] || value.status)));
+  }
+  const findings = section("Наблюдения");
+  for (const item of report.findings) findings.append(evidenceLinks(item.text, item.evidence_ids));
+  const hypotheses = section(report.llm_status === "ok" ? "Гипотезы Qwen" : "Гипотезы по правилам");
+  for (const item of report.hypotheses) {
+    const row = evidenceLinks(item.problem + " · " + item.cause, item.evidence_ids);
+    row.append(node("p", "Проверка до разработки · " + item.verify));
+    row.append(node("p", "Ожидаемый результат · " + item.expected));
+    row.append(node("p", "Нужны данные · " + item.missing));
+    row.append(node("p", "Риск · " + item.risk));
+    row.append(node("p", "Уверенность · " + ({low: "низкая", medium: "средняя", high: "высокая"}[item.confidence])));
+    if (item.contradictions.length) row.append(evidenceLinks("Противоречия", item.contradictions));
+    hypotheses.append(row);
+  }
+  if (!report.hypotheses.length) hypotheses.append(node("p", "Проверяемых гипотез нет."));
+  const limits = section("Ограничения");
+  for (const item of report.limitations) limits.append(node("p", item));
+  if (report.backlog_matches.length) {
+    const backlog = section("Похожие задачи");
+    for (const item of report.backlog_matches) backlog.append(node("p", item.id + " · " + item.title));
+  }
+  if (report.proposed_tasks.length) {
+    const tasks = section("Предложения в бэклог");
+    for (const item of report.proposed_tasks) tasks.append(proposalForm(report, item));
+  }
+  const evidence = section("Доказательства");
+  for (const item of report.evidence) {
+    const article = node("article", "");
+    article.id = "evidence-" + item.id;
+    article.append(node("strong", item.ref + " · " + item.data_mode + " · " + item.quality));
+    if (item.text) article.append(node("p", item.text));
+    if (item.values) article.append(node("p", Object.entries(item.values).map(([k, v]) => k + " = " + (v ?? "нет данных")).join(" · ")));
+    if (item.locator && item.kind === "competitor_web") {
+      try {
+        const url = new URL(item.locator);
+        if (["https:", "http:"].includes(url.protocol)) {
+          const link = node("a", "Открыть источник");
+          link.href = url.href;
+          link.rel = "noopener noreferrer";
+          link.target = "_blank";
+          article.append(link);
+        }
+      } catch { /* omit malformed links */ }
+    }
+    evidence.append(article);
+  }
+}
+
+function evidenceLinks(label, ids) {
+  const item = node("div", "");
+  item.append(node("p", label));
+  for (const id of ids) {
+    const link = node("a", " [" + id + "] ");
+    link.href = "#evidence-" + encodeURIComponent(id);
+    item.append(link);
+  }
+  return item;
+}
+
+function proposalForm(report, item) {
+  const form = node("form", "");
+  const baseline = report.effect_plan.baseline;
+  form.append(node("strong", item.title), node("p", item.tag),
+    node("p", "Исходный четырёхнедельный индекс · " + fmt(baseline)),
+    node("p", item.priority.impact + " · " + item.verification));
+  const label = node("label", "Целевой индекс");
+  const target = document.createElement("input");
+  target.type = "number";
+  target.min = ".01";
+  target.step = ".01";
+  label.append(target);
+  const controlLabel = node("label", "Минимум для контрольной группы");
+  const control = document.createElement("input");
+  control.type = "number";
+  control.min = "0";
+  control.step = ".01";
+  controlLabel.append(control);
+  const accept = node("button", "Согласовать");
+  accept.disabled = baseline == null;
+  const reject = node("button", "Отклонить");
+  reject.type = "button";
+  const output = node("p", "");
+  output.setAttribute("role", "status");
+  form.append(label, controlLabel, accept, reject, output);
+  const submit = async (action) => {
+    if (action === "accept" && (!target.value || !target.checkValidity() || !control.checkValidity())) {
+      output.textContent = "Укажите корректную численную цель.";
+      return;
+    }
+    accept.disabled = reject.disabled = true;
+    try {
+      await api("tasks/decide", {
+        run_id: report.run_id, proposal_id: item.id, action,
+        target: action === "accept" ? Number(target.value) : null,
+        control_min: action === "accept" && control.value ? Number(control.value) : null,
+        idempotency_key: report.run_id + "/" + item.id + "/" + action,
+      });
+      output.textContent = action === "accept" ? "Задача согласована в локальном бэклоге." : "Предложение отклонено.";
+      await reloadRuns();
+    } catch (error) {
+      output.textContent = error.message;
+      accept.disabled = baseline == null;
+      reject.disabled = false;
+    }
+  };
+  form.onsubmit = (event) => { event.preventDefault(); submit("accept"); };
+  reject.onclick = () => submit("reject");
+  return form;
+}
+
+async function reloadRuns() {
+  try {
+    const [journal, backlog] = await Promise.all([api("analysis/journal", {}), api("tasks", {})]);
+    const history = $("#runHistory"), tasks = $("#serverTasks");
+    history.replaceChildren(node("h4", "Последние расследования"));
+    for (const item of journal.runs) {
+      const button = node("button", item.created.replace("T", " ").slice(0, 19) + " UTC · " + item.llm_status);
+      button.onclick = async () => {
+        try { renderInvestigation(await api("analysis/report", { run_id: item.run_id })); }
+        catch (error) { flash(error.message); }
+      };
+      history.append(button);
+    }
+    tasks.replaceChildren(node("h4", "Локальный бэклог"));
+    for (const item of backlog.tasks) {
+      const row = node("article", "");
+      row.append(node("p", item.title + " · " + (item.decision === "accept" ? "согласована" : "отклонена")));
+      if (item.decision === "accept") {
+        const label = node("label", item.data_mode === "synthetic" ? "JSON для симуляции" : "JSON с наблюдениями");
+        const file = document.createElement("input");
+        file.type = "file";
+        file.accept = ".json";
+        label.append(file);
+        const status = node("p", "");
+        status.setAttribute("role", "status");
+        file.onchange = async () => {
+          try {
+            const picked = file.files[0];
+            if (!picked) return;
+            if (picked.size > 100000) throw Error("Файл слишком большой");
+            const review = await api("tasks/review", {
+              task_id: item.id, observation: JSON.parse(await picked.text()),
+              mode: item.data_mode === "synthetic" ? "simulation" : "actual",
+            });
+            status.textContent = (review.mode === "simulation" ? "Симуляция · " : "") + review.recommendation;
+          } catch (error) { status.textContent = error.message; }
+        };
+        if (item.latest_review) status.textContent = item.latest_review.recommendation;
+        row.append(label, status);
+      }
+      tasks.append(row);
+    }
+  } catch (error) {
+    text("#runHistory", error.message);
+  }
+}
+$("#openInvestigation").onclick = () => {
+  $("#search").elements.query.focus();
+  $("#infer").click();
+};
+$("#reloadRuns").onclick = reloadRuns;
+$("#checkNow").onclick = async () => {
+  $("#checkNow").disabled = true;
+  try {
+    const check = await api("analysis/check", { config: data.config });
+    const labels = { signal: "Порог достигнут", normal: "Порог не достигнут",
+      missing: "Недостаточно данных", busy: "Проверка уже идёт" };
+    text("#checkStatus", labels[check.status] + (check.notification ? " · новый сигнал" : ""));
+  } catch (error) {
+    text("#checkStatus", error.message);
+  } finally {
+    $("#checkNow").disabled = false;
+  }
+};
+if (!offline) api("analysis/settings", {}).then((settings) => {
+  text("#analysisDiagnostics", [
+    settings.model_configured ? "Адрес модели настроен" : "Адрес модели не задан",
+    settings.metrika_configured ? "Параметры Метрики заданы" : "Метрика не настроена",
+    settings.monitor_interval ? "Мониторинг каждые " + settings.monitor_interval + " с" : "Мониторинг по расписанию выключен",
+  ].join(" · "));
+  if (settings.public_products.length && settings.public_domains.length) {
+    $("#publicSearch").hidden = false;
+    for (const value of settings.public_products) $("#publicProduct").append(node("option", value));
+    for (const value of settings.public_domains) $("#publicDomains").append(node("option", value));
+  }
+}).catch(() => {});
 $("#txt").onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;

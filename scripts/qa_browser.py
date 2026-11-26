@@ -7,7 +7,8 @@ from tempfile import TemporaryDirectory
 
 root = Path(__file__).resolve().parents[1]
 with TemporaryDirectory() as d:
-    path = Path(d)
+    path = Path(d) / "project"
+    path.mkdir()
     for item in ["pm", "web", "data", "app.py"]:
         src = root / item
         if src.is_dir():
@@ -18,10 +19,10 @@ with TemporaryDirectory() as d:
     for field in (
         "PM_WORKBOOK", "PM_CASE_CONFIG", "PM_SNAPSHOT", "PM_EVIDENCE",
         "PM_BENCHMARK", "PM_LLM_URL", "PM_LLM_PROMPT_FILE",
-        "METRIKA_COUNTER_ID", "METRIKA_TOKEN",
+        "METRIKA_COUNTER_ID", "METRIKA_TOKEN", "PM_MONITOR_INTERVAL", "YANDEX_SEARCH_ENABLED",
     ):
         qa_env.pop(field, None)
-    qa_env["PM_PRIVATE_DIR"] = str(path / "local-data")
+    qa_env["PM_PRIVATE_DIR"] = str(Path(d) / "local-data")
     flat = path / "build" / "index.html"
     subprocess.run(
         [sys.executable, "app.py", "build", "--output", str(flat)],
@@ -114,6 +115,21 @@ with TemporaryDirectory() as d:
             expect(t.locator("#hits")).to_contain_text("QA · абзац 1")
             t.locator("#infer").click()
             expect(t.locator("#ai")).to_contain_text("Модель не подключена")
+            expect(t.locator("#runDetails")).to_contain_text("Доступность источников")
+            expect(t.locator("#runDetails")).to_contain_text("Гипотезы по правилам")
+            proposal = t.locator("#runDetails form").first
+            proposal.get_by_label("Целевой индекс").fill("110")
+            proposal.get_by_role("button", name="Согласовать").click()
+            expect(proposal).to_contain_text("Задача согласована")
+            t.reload()
+            t.get_by_text("Журнал и задачи").click()
+            t.locator("#reloadRuns").click()
+            expect(t.locator("#serverTasks")).to_contain_text("согласована")
+            t.locator("#serverTasks input").first.set_input_files({
+                "name": "simulation.json", "mimeType": "application/json",
+                "buffer": (root / "data/effect-demo.json").read_bytes(),
+            })
+            expect(t.locator("#serverTasks")).to_contain_text("Симуляция")
             t.get_by_text("Настроить сравнение").click()
             t.locator("[name=after_end]").fill("2025-03-24")
             t.locator("#settings button").click()

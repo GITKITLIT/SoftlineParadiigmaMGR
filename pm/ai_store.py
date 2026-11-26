@@ -41,7 +41,11 @@ def database():
                 task_id TEXT NOT NULL REFERENCES tasks(id), fingerprint TEXT NOT NULL, created TEXT NOT NULL,
                 body TEXT NOT NULL, PRIMARY KEY(task_id, fingerprint))""")
             db.execute("PRAGMA user_version=1")
-        elif version != 1:
+        if version < 2:
+            db.execute("""CREATE TABLE IF NOT EXISTS monitor (
+                signature TEXT PRIMARY KEY, status TEXT NOT NULL, changed TEXT NOT NULL, delta REAL)""")
+            db.execute("PRAGMA user_version=2")
+        elif version != 2:
             raise ValueError("Версия хранилища неизвестна")
         yield db
         db.commit()
@@ -121,13 +125,20 @@ def decide(request):
 
 def task_list():
     with database() as db:
-        rows = db.execute("SELECT body FROM tasks ORDER BY rowid DESC LIMIT 50")
-        return [{k: v for k, v in json.loads(row[0]).items() if k != "fingerprint"} for row in rows]
+        rows = db.execute("""SELECT t.body, (
+            SELECT r.body FROM reviews AS r WHERE r.task_id=t.id
+            ORDER BY r.created DESC LIMIT 1
+        ) AS last_review FROM tasks AS t ORDER BY t.rowid DESC LIMIT 50""")
+        return [
+            {k: v for k, v in json.loads(row["body"]).items() if k != "fingerprint"} |
+            {"latest_review": json.loads(row["last_review"]) if row["last_review"] else None}
+            for row in rows
+        ]
 
 
 def review(request):
     import hashlib
-    from .analytics import day, effect
+    from .analytics import WEEK, day, effect
 
     task_id = request.get("task_id")
     if not isinstance(task_id, str):
@@ -150,7 +161,12 @@ def review(request):
                 raise ValueError("Для синтетического расследования доступна симуляция")
             if mode == "actual" and day(observation["fix"]) < day(task["created"]):
                 raise ValueError("Дата исправления предшествует согласованию")
-            computed = effect(observation["rows"], observation["fix"], plan["target"])
+            rows = observation["rows"]
+            if mode == "actual":
+                today = datetime.now(timezone.utc).date()
+                if any(row.get("complete") is True and day(row["week"]) + WEEK > today for row in rows):
+                    raise ValueError("Полная неделя должна закончиться до даты проверки")
+            computed = effect(rows, observation["fix"], plan["target"])
             if "start" in computed:
                 result["measurement"] = {k: v for k, v in computed.items() if k != "status"}
                 core = computed["kaspersky"]
@@ -179,3 +195,40 @@ def review(request):
             db.execute("INSERT OR IGNORE INTO reviews VALUES (?, ?, ?, ?)",
                        (task_id, fingerprint, now(), dumps(result)))
         return result
+
+
+def record_check(signature, status, delta):
+    with database() as db:
+        previous = db.execute("SELECT status FROM monitor WHERE signature=?", (signature,)).fetchone()
+        notify = status == "signal" and (previous is None or previous["status"] != "signal")
+        created = now()
+        db.execute("""INSERT INTO monitor VALUES (?, ?, ?, ?)
+                      ON CONFLICT(signature) DO UPDATE SET status=excluded.status,
+                      changed=excluded.changed, delta=excluded.delta""",
+                   (signature, status, created, delta))
+    return dict(status=status, notification=notify, delta=delta, checked_at=created)
+
+
+def public_report(run_id):
+    report = run(run_id)
+    return {
+        "llm_status": report["llm_status"], "data_mode": report["data_mode"],
+        "sources": {key: value["status"] for key, value in report["sources_status"].items()},
+        "hypothesis_count": len(report["hypotheses"]),
+    }
+
+
+def redmine_export(task_id):
+    with database() as db:
+        row = db.execute("SELECT body FROM tasks WHERE id=? AND action='accept'", (task_id,)).fetchone()
+        if row is None:
+            raise ValueError("Задача не согласована")
+        task = json.loads(row[0])
+    plan = task["effect_plan"]
+    description = "\n".join([
+        "Гипотеза · " + task["hypothesis"], "Проверка · " + task["verification"],
+        "KPI · " + plan["primary_kpi"], "Цель · " + str(plan["target"]),
+        "Тег · " + TASK_TAG,
+    ])
+    return {"status": "pending", "local_task_id": task["id"], "tag": TASK_TAG,
+            "payload": {"issue": {"subject": task["title"], "description": description}}}

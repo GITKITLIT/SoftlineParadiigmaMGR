@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pm import ai_store, investigation
+from pm import ai_store, investigation, monitor
 from pm.analytics import compile_book, effect, finite
 from pm.research import evidence, index_range, search, sources
 from pm.settings import ROOT, private_dir
@@ -59,7 +59,8 @@ def local_doc(body):
     key = hashlib.sha256((kind + "|" + name).encode()).hexdigest()[:12]
     lines = [s.strip() for s in txt.splitlines() if s.strip()]
     adds = [
-        dict(id=f"u-{key}-{i}", ref=f"{name} · абзац {i}", text=line[:2000], kind=kind)
+        dict(id=f"u-{key}-{i}", ref=f"{name} · абзац {i}", text=line[:2000],
+             kind=kind, locator={"file": name, "paragraph": i})
         for i, line in enumerate(lines, 1)
     ]
     if any(len(line) > 2000 for line in lines):
@@ -86,6 +87,23 @@ def api(route, b):
         return local_doc(b)
     if route == "/api/analyze":
         return investigation.analyze(b)
+    if route == "/api/analysis/settings":
+        from pm.analysis_context import allowlist
+
+        public = os.getenv("YANDEX_SEARCH_ENABLED", "").lower() == "true"
+        return {
+            "public_products": sorted(allowlist("YANDEX_SEARCH_PUBLIC_PRODUCTS")) if public else [],
+            "public_domains": sorted(allowlist("YANDEX_SEARCH_ALLOWED_DOMAINS")) if public else [],
+            "model_configured": bool(os.getenv("PM_LLM_URL")),
+            "monitor_interval": monitor.interval(),
+            "metrika_configured": bool(os.getenv("METRIKA_COUNTER_ID") and os.getenv("METRIKA_TOKEN")),
+        }
+    if route == "/api/analysis/check":
+        return monitor.check(b.get("config", {}))
+    if route == "/api/analysis/export":
+        return ai_store.public_report(b["run_id"])
+    if route == "/api/tasks/redmine-export":
+        return ai_store.redmine_export(b["task_id"])
     if route == "/api/analysis/report":
         return ai_store.run(b["run_id"])
     if route == "/api/analysis/journal":
@@ -192,7 +210,16 @@ def main():
             os.environ["PM_WORKBOOK"] = args.workbook
         overview()
         print(f"ParadiigmaMGR: http://127.0.0.1:{args.port}", flush=True)
-        ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+        with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as httpd:
+            stop, worker = monitor.start(monitor.interval())
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                stop.set()
+                if worker:
+                    worker.join(timeout=6)
     elif args.cmd == "import":
         print("Добавлено:", index_range(args.file, args.sheet, args.range, args.kind))
     else:

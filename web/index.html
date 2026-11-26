@@ -1,5 +1,5 @@
 <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
-<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav><a href="#analysis">Разбор</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#effect">Эффект</a></nav></header>
+<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav><a href="#analysis">Разбор</a><a href="#agent">ИИ-агент</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#effect">Эффект</a></nav></header>
 <main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p>
 <section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
 <section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
@@ -7,7 +7,27 @@
 <section id="analysis" class="panel"><h2>Что проверить первым?</h2><button id="toggle" aria-expanded="false" aria-controls="answer">Разобрать падение</button><div id="answer" hidden><h3>Выбор лицензии</h3><p id="reachPeriod"></p><ul id="reach"></ul>
 <h3>Выбор опции и корзина</h3><p>Проверьте, появилась ли лицензия в корзине, и сопоставьте действие с событием в аналитике.</p>
 <ul><li>Лицензия появилась, событие отсутствует — проверить сбор данных вместе с владельцем задачи.</li><li>Лицензия не появилась — воспроизвести ошибку пути покупки. Ошибка передачи события тоже возможна.</li><li>Товар и событие на месте — сверить другие варианты лицензий, устройства и каналы. Причина падения остаётся открытой.</li></ul><p><a href="#t08">Открыть связанную задачу</a></p><button class="draft">Создать задачу проверки</button></div></section>
-<section class="panel" id="sources"><h2>Исследования и источники</h2><p>Найдите фрагменты в демонстрационной подборке или в подключённых локальных материалах.</p><form id="search"><label>Вопрос по релизу<input name="query" required value="Как проверить событие добавления лицензии в корзину?"></label><div class="actions"><button>Найти источники</button><button type="button" id="infer" class="secondary">Предложить гипотезу с ИИ</button></div></form><p id="ai" role="status"></p><div id="hits"></div><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
+<section class="panel" id="sources"><h2>Исследования и источники</h2><p>Найдите фрагменты в демонстрационной подборке или в подключённых локальных материалах.</p><form id="search"><label>Вопрос по релизу<input name="query" required value="Как проверить событие добавления лицензии в корзину?"></label><div class="actions"><button>Найти источники</button><button type="button" id="infer" class="secondary">Предложить гипотезу с ИИ</button></div></form><p id="ai" role="status"></p><div id="hits"></div>
+<div id="agent">
+<h3>Расследование</h3>
+<label><input type="checkbox" id="includeMeter"> Включить Метрику за период из формы ниже</label>
+<details id="publicSearch" hidden><summary>Публичные источники конкурентов</summary>
+<label>Продукт<select id="publicProduct"><option value="">-</option></select></label>
+<label>Домены<select id="publicDomains" multiple></select></label>
+<label>Темы<select id="publicTopics" multiple><option value="pricing">Цены</option><option value="licensing">Лицензирование</option><option value="checkout">Покупка</option><option value="product_features">Характеристики</option><option value="support">Поддержка</option></select></label>
+</details>
+<button type="button" class="secondary" id="openInvestigation">Открыть расследование</button>
+<p id="runSummary" role="status"></p>
+<details><summary>Настройки и диагностика</summary>
+<p id="analysisDiagnostics">Подключите локальный сервер.</p>
+<button type="button" class="secondary" id="checkNow">Проверить порог</button>
+<p id="checkStatus" role="status"></p>
+</details>
+<div id="runDetails"></div>
+<details><summary>Журнал и задачи</summary>
+<button type="button" class="secondary" id="reloadRuns">Обновить</button>
+<div id="runHistory"></div><div id="serverTasks"></div></details>
+</div><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
 <details><summary>Загрузить материал в локальный поиск</summary><form id="upload"><label>Источник<input name="name" maxlength="120" placeholder="Название интервью или исследования" required></label><label>Категория<select name="kind"><option>Интервью</option><option>Конкуренты</option></select></label><label>Текстовый файл UTF-8<input type="file" id="txt" accept=".txt,text/plain"></label><label>Выбранные абзацы<textarea name="text" required maxlength="30000"></textarea></label><button>Добавить в поиск</button></form></details><div id="t08" class="note"></div></section>
 <section id="backlog" class="panel"><h2>Демо-бэклог</h2><p>Задачи сохраняются в этом браузере. Трекер Redmine подключается отдельно.</p><div id="saved"></div><button class="draft" id="draftBtn">Создать задачу проверки</button>
 <form id="task" hidden><h3>Гипотеза до следующей доработки</h3><label>Название<input name="title" required maxlength="200"></label><label>Гипотеза<textarea name="hypothesis" required></textarea></label><label>Способ проверки<textarea name="steps" required rows="4"></textarea></label><label>Численная цель четырёхнедельного индекса<input type="number" name="target" required min="0.01" step=".01"></label><p id="criterion"></p><p>Тег · сгенерирована ИИ-помощником</p><div class="actions"><button>Сохранить задачу</button><button id="cancel" type="button" class="secondary">Отменить</button></div></form></section>

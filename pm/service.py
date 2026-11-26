@@ -21,7 +21,7 @@ def overview():
     return snapshot
 
 
-def recalculate(snapshot, values):
+def recalculate(snapshot, values, *, allow_partial=False):
     cfg = snapshot["config"]
     keys = (
         "before_start",
@@ -45,6 +45,8 @@ def recalculate(snapshot, values):
 
         def avg(ds, col):
             if any(w not in points or points[w][col] is None for w in ds):
+                if allow_partial:
+                    return None
                 raise ValueError("Выбранное окно содержит пропуски")
             return mean(finite(points[w][col]) for w in ds)
 
@@ -54,8 +56,8 @@ def recalculate(snapshot, values):
             before=before,
             after=after,
             extra=ext,
-            delta=change(before, after),
-            extra_delta=change(before, ext),
+            delta=change(before, after) if after is not None else None,
+            extra_delta=change(before, ext) if ext is not None else None,
             rolling_base=avg(base, 2),
         )
     return snapshot

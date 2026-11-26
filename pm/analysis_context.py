@@ -64,7 +64,10 @@ def public_search(request, collector=None):
         ]
         reason = response.get("reason")
         reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_0-9]{1,64}", reason) else None
-        return status, reason, [item for item in items if item]
+        normalized = [item for item in items if item]
+        if len(normalized) != len(items):
+            return "partial" if normalized else "error", "invalid_items", normalized
+        return status, reason, normalized
     except Exception:
         return "error", "adapter_failed", []
 
@@ -192,9 +195,16 @@ def collect(query, snapshot, request, *, collector=None, meter=metrika):
         kind = {"Интервью": "interview", "Конкуренты": "competitor_local",
                 "Бэклог": "backlog"}.get(item["kind"], "research")
         identifier = "file:" + hashlib.sha256(str(item["id"]).encode()).hexdigest()[:18]
-        item_mode = "local" if identifier and (mode == "local" or item.get("locator") or str(item["id"]).startswith("u-") or os.getenv("PM_EVIDENCE")) else "synthetic"
-        local_hits.append(entry(identifier, kind, ref, item["text"],
-                                mode=item_mode, locator=ref, quality="excerpt"))
+        provenance = item.get("locator")
+        item_mode = "local" if (
+            mode == "local" or provenance or str(item["id"]).startswith("u-") or os.getenv("PM_EVIDENCE")
+        ) else "synthetic"
+        locator = ref
+        if isinstance(provenance, dict):
+            locator = {key: safe_locator(provenance[key]) for key in ("file", "sheet", "cell", "paragraph")
+                       if key in provenance}
+        local_hits.append(entry(identifier, kind, ref, item["text"], mode=item_mode,
+                                locator=locator, quality="excerpt"))
     for item in local_hits + web:
         normalized = " ".join(item["text"].casefold().split())
         if not normalized or normalized in seen_text or item["id"] in seen_ids:
