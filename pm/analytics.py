@@ -2,7 +2,7 @@
 
 import json
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from statistics import mean
 
 from openpyxl import load_workbook
@@ -17,7 +17,18 @@ WEEK = timedelta(weeks=1)
 
 
 def day(value):
-    return date.fromisoformat(str(value)[:10])
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() == value:
+                return parsed
+        except ValueError:
+            pass
+    raise ValueError("Ожидается дата в формате ГГГГ-ММ-ДД")
 
 
 def finite(value):
@@ -39,7 +50,41 @@ def weeks(start, end):
 
 
 def change(before, after):
-    return 100 * (after / before - 1) if before else None
+    return (after - before) / before * 100 if before else None
+
+
+def compare_series(points, base, post, extended, metric):
+    column = {"orders_index": 1, "orders_index_4w": 2}[metric]
+    by_date = {}
+    for point in points:
+        week = day(point[0])
+        if week.weekday():
+            raise ValueError(f"Начало недели должно быть понедельником: {week}")
+        if week in by_date:
+            raise ValueError(f"Дублируется неделя {week}")
+        by_date[week] = point
+
+    def average(dates, index):
+        if any(d not in by_date or by_date[d][index] is None for d in dates):
+            raise ValueError("Выбранное окно содержит пропуски")
+        return mean(finite(by_date[d][index]) for d in dates)
+
+    before, after = average(base, column), average(post, column)
+    extra = average(extended, column)
+    return dict(
+        before=before,
+        after=after,
+        extra=extra,
+        delta=change(before, after),
+        extra_delta=change(before, extra),
+        rolling_base=average(base, 2),
+    )
+
+
+def reach_summary(reach):
+    num = sum(device["num"] for device in reach.values())
+    den = sum(device["den"] for device in reach.values())
+    return dict(reach_rate=num / den if den else None, cart_event={"available": False})
 
 
 def compile_book(path, config=None, source="Локальная выгрузка"):
@@ -50,7 +95,8 @@ def compile_book(path, config=None, source="Локальная выгрузка"
         "orders_index_4w",
     ):
         raise ValueError("Неизвестная настройка или метрика")
-    finite(cfg["alert_percent"])
+    if finite(cfg["alert_percent"]) > 100:
+        raise ValueError("Проверьте порог")
     start, end, post, full, partial, rs, re = (
         day(cfg[k])
         for k in (
@@ -66,6 +112,7 @@ def compile_book(path, config=None, source="Локальная выгрузка"
     base, after = weeks(start, end), weeks(post, full)
     if full >= partial or partial.weekday() or re < rs:
         raise ValueError("Проверьте границы неполной недели и периода Метрики")
+    extended = weeks(post, partial)
     book = load_workbook(path, read_only=True, data_only=True)
     try:
         releases = {r["release_id"]: r for r in records(book["Релизы"])}
@@ -80,44 +127,26 @@ def compile_book(path, config=None, source="Локальная выгрузка"
         sales = list(records(book["Продажи"]))
         series = []
         for family in case["families"]:
-            by_date = {}
-            for r in sales:
-                if r["product_family"] == family and r["channel"] == case["channel"]:
-                    d = day(r["week_start"])
-                    if d in by_date:
-                        raise ValueError(f"Дублируется неделя {d} / {family}")
-                    by_date[d] = r
-
-            def average(dates, metric):
-                if any(d not in by_date or by_date[d][metric] is None for d in dates):
-                    raise ValueError(f"Неполное окно по {family} / {metric}")
-                return mean(finite(by_date[d][metric]) for d in dates)
-
-            metric = cfg["metric"]
-            before, main = average(base, metric), average(after, metric)
-            extended = average(weeks(post, partial), metric)
-            rolling_base = average(base, "orders_index_4w")
             points = [
-                [d.isoformat(), finite(r["orders_index"]), r["orders_index_4w"]]
-                for d, r in sorted(by_date.items())
-                if d <= partial
+                [
+                    day(row["week_start"]).isoformat(),
+                    row["orders_index"],
+                    row["orders_index_4w"],
+                ]
+                for row in sales
+                if (row["product_family"], row["channel"]) == (family, case["channel"])
             ]
-            series.append(
-                dict(
-                    name=family,
-                    before=before,
-                    after=main,
-                    extra=extended,
-                    delta=change(before, main),
-                    extra_delta=change(before, extended),
-                    rolling_base=rolling_base,
-                    points=points,
-                )
-            )
+            summary = compare_series(points, base, after, extended, cfg["metric"])
+            visible = sorted(point for point in points if point[0] <= partial.isoformat())
+            for _, weekly, rolling in visible:
+                finite(weekly)
+                if rolling is not None:
+                    finite(rolling)
+            series.append(dict(name=family, points=visible, **summary))
         reach = {}
         for device in ("desktop", "mobile"):
             seen = set()
-            num = den = 0
+            num = den = covered = 0
             for r in records(book["Метрики_данные"]):
                 if (r["metric_id"], r["product"], r["segment"]) != (
                     "cfg_reach_rate",
@@ -126,19 +155,22 @@ def compile_book(path, config=None, source="Локальная выгрузка"
                 ):
                     continue
                 d = day(r["date"])
-                if not rs <= d <= re or not r["detail_json"]:
+                if not rs <= d <= re:
                     continue
                 if d in seen:
                     raise ValueError(f"Дублируется сегмент {device} за {d}")
+                seen.add(d)
+                if not r["detail_json"]:
+                    continue
                 z = json.loads(r["detail_json"])
                 a, b = finite(z["configurator_visits"]), finite(z["family_visits"])
                 if a > b:
                     raise ValueError("Числитель больше числа визитов")
-                seen.add(d)
+                covered += 1
                 num += a
                 den += b
             reach[device] = dict(
-                num=num, den=den, days=len(seen), total=(re - rs).days + 1
+                num=num, den=den, days=covered, total=(re - rs).days + 1
             )
         return dict(
             source=source,
@@ -146,6 +178,7 @@ def compile_book(path, config=None, source="Локальная выгрузка"
             launch=launch.isoformat(),
             series=series,
             reach=reach,
+            **reach_summary(reach),
             release_id=case["release_id"],
             release_task=release["related_task_ids"],
             backlog=dict(id=case["backlog_id"], title=task["title"], status=task["status"]),
@@ -155,7 +188,7 @@ def compile_book(path, config=None, source="Локальная выгрузка"
 
 
 def effect(rows, fix_date, target):
-    """Earliest four fully observed calendar weeks after a fix, aligned across families."""
+    """Compare complete calendar weeks around the fix for both families."""
     finite(target)
     fix = day(fix_date)
     first = fix + timedelta(days=(-fix.weekday()) % 7)
@@ -163,28 +196,24 @@ def effect(rows, fix_date, target):
     by_date = {}
     for row in rows:
         d = day(row["week"])
-        if d in by_date or d.weekday() or type(row["complete"]) is not bool:
+        if d in by_date or d.weekday() or type(row.get("complete")) is not bool:
             raise ValueError(
                 "Недели должны быть уникальными понедельниками с признаком полноты"
             )
         by_date[d] = row
-    if any(d not in by_date or not by_date[d]["complete"] for d in dates):
-        return dict(status="Ожидаем данные после исправления")
-    result = {
-        key: mean(finite(by_date[d][key]) for d in dates)
-        for key in ("kaspersky", "astra")
-    }
-    prior_dates = (
-        [first - i * WEEK for i in range(1, 5)]
-        if fix == first
-        else [first - i * WEEK for i in range(2, 6)]
-    )
-    prior = None
-    if all(d in by_date and by_date[d]["complete"] for d in prior_dates):
-        prior = {
-            key: mean(finite(by_date[d][key]) for d in prior_dates)
-            for key in ("kaspersky", "astra")
-        }
+    last_prior = fix - timedelta(days=fix.weekday()) - WEEK
+    prior_dates = [last_prior - i * WEEK for i in range(4)]
+    families = ("kaspersky", "astra")
+    for week in prior_dates + dates:
+        row = by_date.get(week)
+        if (
+            row is None
+            or not row["complete"]
+            or any(row.get(key) is None for key in families)
+        ):
+            return dict(status="Ожидаем данные после исправления")
+    prior = {key: mean(finite(by_date[d][key]) for d in prior_dates) for key in families}
+    result = {key: mean(finite(by_date[d][key]) for d in dates) for key in families}
     return dict(
         before_fix=prior,
         status="Цель достигнута"
