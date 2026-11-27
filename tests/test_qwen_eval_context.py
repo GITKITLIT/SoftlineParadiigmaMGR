@@ -71,6 +71,25 @@ class ContextTests(unittest.TestCase):
                        '"verify":"Сравнить два пути","expected":"Параметр появится",'
                        '"evidence_ids":["unknown"],"contradictions":[]}]}', {})
 
+    def test_synthesis_rejects_asserted_causes_and_missing_primary_reference(self):
+        orders = entry("orders:0", "orders", "Synthetic series", mode="synthetic", values={"delta": -24})
+        gap = entry("basket:desktop", "funnel", "Fixture measurement gap", mode="synthetic", quality="incomplete")
+        evidence = {row["id"]: row for row in (orders, gap)}
+        hypothesis = {"cause": "Релиз сломал учёт событий", "verify": "Сопоставить заказы и фактические события",
+                      "expected": "Записи различаются", "evidence_ids": list(evidence), "contradictions": []}
+
+        def parse(item):
+            return qwen.parse(json.dumps({"hypotheses": [item]}), evidence, primary="orders:0")
+
+        with self.assertRaises(ValueError):
+            parse(hypothesis)
+        eligible = hypothesis | {"cause": "Релиз мог изменить учёт событий"}
+        with self.assertRaises(ValueError):
+            parse(eligible | {"evidence_ids": [gap["id"]]})
+        with self.assertRaises(ValueError):
+            parse(eligible | {"evidence_ids": [orders["id"]]})
+        self.assertEqual(parse(eligible)[0]["evidence_ids"], list(evidence))
+
     def test_client_cannot_supply_private_history_or_expand_scope(self):
         engine = Mock()
         with self.assertRaisesRegex(ValueError, "область"):
