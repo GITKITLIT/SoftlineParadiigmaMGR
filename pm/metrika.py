@@ -91,6 +91,12 @@ def metrika(start, end, opener=None, *, detailed=False, segment=None):
             if not result["available"]:
                 result["message"] = "Метрика не вернула число визитов."
             if opener is None:
+                import sqlite3
+                from .collection import save_meter
+                try:
+                    save_meter(result, counter, segments.get(segment), definitions=metrics, coverage=scope)
+                except (OSError, sqlite3.Error, ValueError):
+                    result["memory_status"] = "write_failed"
                 with LOCK:
                     CACHE[key] = (monotonic(), result)
                     while len(CACHE) > 64:

@@ -67,6 +67,21 @@ def local_doc(body):
 
 
 def api(route, b):
+    if route.startswith("/api/memory/"):
+        from pm import collection, history
+
+        action = route.removeprefix("/api/memory/")
+        if action == "sync":
+            from datetime import date, timedelta
+            previous = (date.today() - timedelta(days=1)).isoformat()
+            return collection.sync(b.get("kind", "sales"), b.get("day", previous), manual=True)
+        if action == "overview":
+            return history.overview(b.get("mode", "local"))
+        if action == "series":
+            return {"series": history.series_index(b.get("mode", "local"), product=b.get("product"))}
+        readers = {"compare": history.compare, "timeline": history.timeline,
+                   "search": history.search, "competitors": history.competitor_changes}
+        return readers[action](b)
     if route == "/api/overview":
         return recalculate(overview(), b)
     if route == "/api/search":
@@ -205,22 +220,35 @@ def main():
     imp.add_argument("--sheet")
     imp.add_argument("--range")
     imp.add_argument("--preview", action="store_true")
+    history_import = subs.add_parser("import-history")
+    history_import.add_argument("--file", type=Path, required=True)
+    history_import.add_argument("--mode", choices=("local", "synthetic"), required=True)
     args = p.parse_args()
+    if args.cmd == "import-history":
+        from pm.collection import ingest_file
+        print(as_json(ingest_file(args.file, mode=args.mode)))
+        return
     if args.cmd == "serve":
         if args.workbook:
             os.environ["PM_WORKBOOK"] = args.workbook
         overview()
         print(f"ParadiigmaMGR: http://127.0.0.1:{args.port}", flush=True)
         with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as httpd:
+            from pm import collection
+
             stop, worker = monitor.start(monitor.interval())
+            collection_stop, collection_worker = collection.start()
             try:
                 httpd.serve_forever()
             except KeyboardInterrupt:
                 pass
             finally:
                 stop.set()
+                collection_stop.set()
                 if worker:
                     worker.join(timeout=6)
+                if collection_worker:
+                    collection_worker.join(timeout=8)
     elif args.cmd == "import":
         extension = args.file.suffix.casefold()
         if not kind_is_supported(args.kind):

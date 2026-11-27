@@ -15,7 +15,7 @@ SYSTEM = """Ты исследуешь продукт интернет-магаз
 Предложи проверяемую возможную причину. Все численные факты вычислены сервером, не повторяй цифры.
 Поля cause, verify и expected — русские предложения, не коды. Указывай ID только в массивах ссылок.
 cause — возможный механизм, а не повтор симптома. verify — действие до разработки, способное опровергнуть
-причину. expected — наблюдение, если причина верна. Один ID не может одновременно подтверждать и
+причину. expected — наблюдение, если причина верна. Старые гипотезы и решения служат контекстом, а не доказательством. Один ID не может одновременно подтверждать и
 опровергать гипотезу. Совпадение с релизом не доказывает его влияние. Сниппет не доказывает свойства продукта.
 Если данных достаточно, назови хотя бы одну гипотезу. При отсутствии опоры верни пустой список.
 Пример формы: cause «Фильтр мог скрыть нужный товар», verify «Повторить поиск с фильтром и без него»,
@@ -95,7 +95,8 @@ def parse(content, evidence):
             item["evidence_ids"] = [ref for ref in item["evidence_ids"] if ref not in overlap]
             item["citation_ambiguities"] = sorted(overlap)
         corroboration = [evidence[key] for key in item["evidence_ids"]]
-        if not any(e["kind"] not in {"metrika", "competitor_web", "release"} for e in corroboration):
+        if not any(e["kind"] not in {"metrika", "competitor_web", "release", "memory_context", "historical_comparison"}
+                   for e in corroboration):
             raise ValueError
         if "problem" not in item:
             measured_drop = any(
@@ -135,7 +136,7 @@ def _infer(query, evidence, opener, planning, facts):
     except (ValueError, OSError):
         return "unavailable", [], {}, "invalid_configuration"
 
-    if not any(item["kind"] in {"orders", "funnel", "interview", "research", "competitor_local", "backlog", "effect"} for item in evidence):
+    if not any(item["kind"] in {"orders", "funnel", "interview", "research", "competitor_local", "backlog", "effect", "historical_metric", "historical_document", "historical_competitor"} for item in evidence):
         return "unavailable", [], {}, "insufficient_evidence"
     opener = opener or build_opener(ProxyHandler({}), NoRedirect()).open
     model = os.getenv("PM_LLM_MODEL", "qwen3-4b")

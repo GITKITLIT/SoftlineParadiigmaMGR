@@ -106,9 +106,27 @@ def normalize_web(item, domains, product, topics):
         return entry(item["id"], "competitor_web", title, text,
                      mode="public", quality=item["content_type"], locator=item["url"],
                      observed_at=utc(item.get("published_at")), retrieved_at=utc(item.get("retrieved_at")),
-                     topic=item["topic"], freshness=freshness(item.get("published_at")))
+                     topic=item["topic"], product=product, competitor=host_from_url(item["url"]),
+                     freshness=freshness(item.get("published_at")),
+                     **verified_offer(item))
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
+
+
+def host_from_url(value):
+    return urlsplit(value).hostname
+
+
+def verified_offer(item):
+    offer = item.get("offer")
+    if item.get("content_type") != "page_excerpt" or not isinstance(offer, dict):
+        return {}
+    value, currency, terms = (offer.get(key) for key in ("value", "currency", "terms"))
+    if (offer.get("metric") == "price" and type(value) in (int, float) and 0 <= value < 1e12
+            and isinstance(currency, str) and re.fullmatch(r"[A-Z]{3}", currency)
+            and isinstance(terms, str) and 0 < len(terms) <= 350):
+        return {"offer": {"metric": "price", "value": value, "currency": currency, "terms": terms}}
+    return {}
 
 
 def utc(value):
@@ -167,15 +185,19 @@ TOOLS = {
     "backlog": "Связанная задача и похожие записи из существующего бэклога",
     "public_competitors": "Конкуренты из явно выбранного публичного каталога",
     "effect": "Согласованные критерии и последняя сохранённая оценка выбранной задачи",
+    "compare_history": "Сравнение двух заданных периодов в одном историческом ряду",
+    "search_history": "Релевантные исторические исследования, расследования и решения",
+    "competitor_history": "История сопоставимых ценовых предложений по заданному периоду",
 }
-FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect")
+FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect", "compare_history", "search_history", "competitor_history")
 
 
 class InvestigationContext:
     """Publish evidence only after its tool runs. Workbook tools share one snapshot."""
 
-    def __init__(self, query, request, *, collector=None, meter=None, snapshot_loader=None):
+    def __init__(self, query, request, *, collector=None, meter=None, snapshot_loader=None, remember=False):
         self.query = query
+        self.remember = remember
         self.request = request
         self.mode = "local" if os.getenv("PM_WORKBOOK") or os.getenv("PM_SNAPSHOT") else "synthetic"
         self.collector = collector
@@ -190,17 +212,40 @@ class InvestigationContext:
         self.completed = set()
         self.statuses = {key: {"status": "not_checked"} for key in (
             "sales", "funnel", "release", "backlog", "research", "competitor_local",
-            "metrika", "competitor_web", "effect",
+            "metrika", "competitor_web", "effect", "historical_metrics", "memory", "historical_competitors",
         )}
         self.available = dict(TOOLS)
+        scope = request.get("memory")
+        if scope is not None and not isinstance(scope, dict):
+            raise ValueError("Область исторического анализа должна быть объектом")
+        self.memory_scope = scope or {}
+        from .history import require_mode
+        selected_mode = require_mode(self.memory_scope.get("mode", self.mode))
+        if selected_mode != self.mode:
+            self.mode = selected_mode
+            for tool, status in (("sales", "sales"), ("funnel", "funnel"), ("releases", "release"),
+                                 ("backlog", "backlog"), ("metrika", "metrika"), ("research", "research"),
+                                 ("competitors", "competitor_local"), ("public_competitors", "competitor_web")):
+                self.available.pop(tool)
+                self.statuses[status] = {"status": "disabled", "reason": "different_current_data_mode"}
+        if not self.memory_scope.get("compare"):
+            self.available.pop("compare_history")
+            self.statuses["historical_metrics"] = {"status": "disabled", "reason": "no_period_selection"}
+        if not self.memory_scope.get("competitors"):
+            self.available.pop("competitor_history")
+            self.statuses["historical_competitors"] = {"status": "disabled", "reason": "no_period_selection"}
+        historical_words = ("год назад", "ранее", "истори", "архив", "прошл", "отверг", "квартал")
+        if scope is None and not any(word in query.casefold() for word in historical_words):
+            self.available.pop("search_history")
+            self.statuses["memory"] = {"status": "disabled", "reason": "not_requested"}
         if not request.get("metrika"):
-            self.available.pop("metrika")
+            self.available.pop("metrika", None)
             self.statuses["metrika"] = {"status": "disabled", "reason": "not_requested"}
         if not request.get("task_id"):
             self.available.pop("effect")
             self.statuses["effect"] = {"status": "disabled", "reason": "no_task_selected"}
         if not request.get("web") or os.getenv("YANDEX_SEARCH_ENABLED", "").lower() != "true":
-            self.available.pop("public_competitors")
+            self.available.pop("public_competitors", None)
             self.statuses["competitor_web"] = {
                 "status": "disabled",
                 "reason": "no_public_scope" if not request.get("web") else "configuration_disabled",
@@ -235,6 +280,9 @@ class InvestigationContext:
             "backlog": ("backlog", self.backlog),
             "public_competitors": ("competitor_web", self.public),
             "effect": ("effect", self.effect),
+            "compare_history": ("historical_metrics", self.compare_history),
+            "search_history": ("memory", self.search_history),
+            "competitor_history": ("historical_competitors", self.competitor_history),
         }
         key, handler = handlers[name]
         before = set(self.evidence)
@@ -252,6 +300,9 @@ class InvestigationContext:
 
     def sales(self):
         snapshot = self.get_snapshot()
+        if self.remember:
+            from .collection import capture_sales
+            capture_sales(snapshot, self.mode)
         cfg = snapshot["config"]
         before, after = ((cfg[f"{key}_start"], cfg[f"{key}_end"]) for key in ("before", "after"))
         periods = {"before": before, "after": after}
@@ -441,3 +492,59 @@ class InvestigationContext:
                        mode=task["data_mode"], values=values, source_group="effect_review",
                        quality="observed" if review else "incomplete"))
         return ("ok", None) if review else ("partial", "waiting_for_data")
+
+
+    def compare_history(self):
+        from .history import compare
+
+        args = self.memory_scope["compare"] | {"mode": self.mode}
+        result = compare(args)
+        series = result["series"]
+        for key in ("before", "after"):
+            measured = result[key]
+            self.add(entry(
+                f"memory:metric:{series['id']}:{key}", "historical_metric", series["metric"],
+                mode=self.mode, unit=series["unit"], period=measured["period"], quality=measured["status"],
+                metric=series["metric"], source_group=f"history:{series['id']}",
+                values={name: measured[name] for name in ("value", "days", "status")},
+                locator={"series_id": series["id"], "observations": measured["observations"]},
+            ))
+        self.limits.extend(result["warnings"])
+        if result["status"] != "ok":
+            self.limits.append("Исторические окна неполны либо несопоставимы. Изменение по ним не рассчитано.")
+            return "partial", "incomparable"
+        # The two measured windows remain the primary records. The delta is derived.
+        self.add(entry("memory:comparison", "historical_comparison", series["product"],
+                       mode=self.mode, source_group=f"history:{series['id']}", quality="derived",
+                       values={"delta": result["delta"], "delta_percent": result["delta_percent"]}))
+        return "ok", None
+
+    def search_history(self):
+        from .history import search
+
+        options = self.memory_scope.get("search", {})
+        result = search(options | {"mode": self.mode, "query": self.query})
+        for item in result["documents"][:4]:
+            self.add(entry(f"memory:document:{item['id']}", "historical_document", item["reference"],
+                           item["content"], mode=self.mode, quality="excerpt", observed_at=item["observed"],
+                           source_group=f"document:{item['reference'].split(' · ', 1)[0]}",
+                           locator={"fragment_id": item["id"], "revision": item["revision"]}))
+        for index, item in enumerate(result["decisions"][:4]):
+            self.add(entry(f"memory:decision:{index}", "memory_context", "Предыдущее решение",
+                           item.get("proposal") or item.get("summary") or "", mode=self.mode,
+                           quality="historical_context", locator={"run_id": item["run_id"]},
+                           values={"decision": item["decision"], "reason": item["decision_reason"],
+                                   "effect": item["effect"]}))
+        return ("ok", None) if result["documents"] or result["decisions"] else ("missing", "no_related_history")
+
+    def competitor_history(self):
+        from .history import competitor_changes
+
+        rows = competitor_changes(self.memory_scope["competitors"] | {"mode": self.mode})
+        for row in rows[:5]:
+            self.add(entry(f"memory:offer:{row['observation_id']}", "historical_competitor", row["competitor"],
+                           mode=self.mode, quality=row["quality"], locator=row["reference"],
+                           observed_at=row["published"], unit=row["currency"],
+                           source_group=f"public:{row['competitor']}", values={"before": row["before"], "after": row["after"]},
+                           memory_observation_id=row["observation_id"]))
+        return ("ok", None) if rows else ("missing", "no_comparable_price_changes")

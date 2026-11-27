@@ -28,7 +28,7 @@ def database():
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("BEGIN IMMEDIATE")
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4):
+        if version not in (0, 1, 2, 3, 4, 5):
             raise ValueError("Версия хранилища неизвестна")
         if version == 0:
             db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created TEXT NOT NULL, report TEXT NOT NULL)")
@@ -60,6 +60,15 @@ def database():
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS evidence_collection ON imported_evidence(collection)")
             db.execute("PRAGMA user_version=4")
+        if version < 5:
+            from .memory import migrate, document_version
+            migrate(db)
+            collections = db.execute("SELECT DISTINCT collection FROM imported_evidence").fetchall()
+            for row in collections:
+                items = [json.loads(item["body"]) for item in db.execute(
+                    "SELECT body FROM imported_evidence WHERE collection=? ORDER BY rowid", (row["collection"],))]
+                document_version(db, row["collection"], items)
+            db.execute("PRAGMA user_version=5")
         yield db
         db.commit()
     finally:
@@ -68,7 +77,9 @@ def database():
 
 
 def store_excerpts(collection, items):
+    from .memory import document_version
     with database() as db:
+        items = document_version(db, collection, items)
         db.execute("DELETE FROM imported_evidence WHERE collection=?", (collection,))
         db.executemany("""INSERT INTO imported_evidence VALUES (?, ?, ?)
                           ON CONFLICT(id) DO UPDATE SET collection=excluded.collection, body=excluded.body""",
@@ -84,8 +95,11 @@ def stored_excerpts():
         return [json.loads(row["body"]) for row in db.execute("SELECT body FROM imported_evidence")]
 
 def save_run(report):
+    from .memory import record_investigation, safe_data
+    report = safe_data(report)
     with database() as db:
         db.execute("INSERT INTO runs VALUES (?, ?, ?)", (report["run_id"], now(), dumps(report)))
+        record_investigation(db, report)
 
 
 def run(run_id):
@@ -119,6 +133,11 @@ def decide(request):
         for value in (run_id, proposal_id, key)
     )):
         raise ValueError("Нужны корректное действие, идентификаторы и ключ повтора")
+    from .memory import redact
+    reason = request.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 800):
+        raise ValueError("Укажите краткую причину решения")
+    reason = redact(reason.strip()) if reason else None
     target = finite(request.get("target")) if action == "accept" else None
     guardrail = request.get("control_min")
     if guardrail is not None:
@@ -149,6 +168,8 @@ def decide(request):
     identity = [run_id, proposal_id, action, target, guardrail]
     if stop_if_below is not None or guards:
         identity.extend([stop_if_below, guards])
+    if reason:
+        identity.append({"reason": reason})
     fingerprint = hashlib.sha256(dumps(identity).encode()).hexdigest()
     with database() as db:
         previous = db.execute("SELECT fingerprint, task_id FROM idempotency WHERE key=?", (key,)).fetchone()
@@ -165,7 +186,7 @@ def decide(request):
                 effect_plan=plan | {"target": target, "control_min": guardrail, "stop_if_below": stop_if_below,
                                     "guardrail_metrics": guards},
                 data_mode=report["data_mode"], redmine_status="not_configured",
-                fingerprint=fingerprint, created=now(),
+                fingerprint=fingerprint, created=now(), decision_reason=reason,
             )
             db.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?)",
                        (record["id"], run_id, proposal_id, action, dumps(record)))
@@ -235,7 +256,8 @@ def review(request):
                     any(not isinstance(item, str) or not 1 <= len(item) <= 180 for item in factors)):
                 raise ValueError("Внешние факторы передаются списком из коротких описаний")
             result["release_date"] = day(observation["fix"]).isoformat()
-            result["external_factors"] = factors
+            from .memory import safe_data
+            result["external_factors"] = safe_data(factors)
             computed = effect(rows, observation["fix"], plan["target"], allow_missing_values=True)
             if "start" in computed:
                 result["measurement"] = {k: v for k, v in computed.items() if k != "status"}
@@ -374,7 +396,9 @@ def daily_digest():
         """, (start,))
         for row in rows:
             report = json.loads(row["report"])
-            group = daily[report["data_mode"]]
+            group = daily.setdefault(report["data_mode"], {
+                "runs": 0, "with_hypotheses": 0, "pending_review": 0, "recent_ids": [],
+            })
             group["runs"] += 1
             group["with_hypotheses"] += bool(report["hypotheses"])
             group["pending_review"] += len(report["proposed_tasks"]) > row["reviews"]

@@ -19,14 +19,14 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
     context = InvestigationContext(query, request, collector=collector, meter=meter,
-                                   snapshot_loader=snapshot_loader)
+                                   snapshot_loader=snapshot_loader, remember=persist)
     planner = decide if decide is not None else qwen.planner() if infer is None else None
     screened = off_topic(query)
     if screened:
         trace, planning_usage, termination = [{"step": "scope", "status": "out_of_scope", "actor": "server"}], {}, "out_of_scope"
     else:
         trace, planning_usage, termination = investigate(context, planner)
-    if termination != "out_of_scope" and context.evidence and "backlog" not in context.completed:
+    if termination != "out_of_scope" and context.evidence and "backlog" in context.available and "backlog" not in context.completed:
         check = context.run("backlog", {})
         trace.append({"step": "tool", "tool": "backlog", "actor": "server",
                       "purpose": "approval_prerequisite", "arguments": {}, "seconds": 0, **check})
@@ -34,6 +34,15 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     statuses, limits, matches = context.statuses, context.limits, context.matches
     gathered = time.perf_counter() - started
     findings = correlate(evidence)
+    comparison = next((item for item in evidence if item["id"] == "memory:comparison"), None)
+    if comparison:
+        related = [item["id"] for item in evidence if item["kind"] == "historical_metric"]
+        findings.append(dict(
+            relation="historical_comparison", statement_type="fact",
+            text="Изменение между сопоставимыми историческими окнами",
+            evidence_ids=related, contradictions=[], missing=[], checks=[],
+            confidence="medium", values=comparison["values"],
+        ))
     for item in evidence:
         delta = item.get("values", {}).get("delta")
         if item["kind"] == "orders" and delta is not None:
@@ -72,6 +81,8 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
     if termination == "out_of_scope":
         summary = "Вопрос за пределами продуктовой аналитики."
+    elif comparison:
+        summary = "Сопоставлены выбранные исторические периоды."
     elif core is None or core["values"]["delta"] is None:
         summary = "Недостаточно недель для сравнения основного показателя."
     elif core["values"]["delta"] <= -core["values"]["alert_percent"] and core["values"]["delta"] < 0:
@@ -144,7 +155,7 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         notice=("Модель не подключена или ответ не прошёл проверку. Показан расчёт и поиск."
                 if status not in {"ok", "not_needed"} else ""),
     )
-    report["request_context"] = {key: request[key] for key in ("query", "config", "metrika", "web", "task_id")
+    report["request_context"] = {key: request[key] for key in ("query", "config", "metrika", "web", "task_id", "memory")
                                  if key in request}
     if previous:
         report["previous_run_id"] = previous["run_id"]
