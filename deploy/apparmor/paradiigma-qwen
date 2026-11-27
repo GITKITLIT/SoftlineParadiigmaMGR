@@ -1,0 +1,30 @@
+#include <tunables/global>
+
+profile paradiigma-launcher flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/bin/python3{,.12} ixr,
+  /usr/{,local/}lib/python3*/** mr,
+  /usr/pyvenv.cfg r,
+  /usr/bin/pyvenv.cfg r,
+  /opt/paradiigma/releases/*/scripts/run_model.py r,
+  /opt/paradiigma/releases/*/{scripts,pm}/ r,
+  /opt/paradiigma/releases/*/pm/{__init__,settings}.py r,
+  /opt/paradiigma/releases/*/pm/__pycache__/** r,
+  /var/lib/paradiigma/models/*.gguf r,
+  /usr/local/bin/llama-server Px -> paradiigma-inference,
+  signal (send) peer=paradiigma-inference,
+}
+
+profile paradiigma-inference flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/local/bin/llama-server mr,
+  /usr/local/lib/** mr,
+  /sys/devices/system/{cpu,node}/** r,
+  @{PROC}/cpuinfo r,
+  @{PROC}/meminfo r,
+  @{PROC}/sys/vm/* r,
+  /var/lib/paradiigma/models/*.gguf mr,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+}

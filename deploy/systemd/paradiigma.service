@@ -1,0 +1,50 @@
+[Unit]
+Description=PARADИИGMA product assistant
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=4
+
+[Service]
+Type=exec
+User=pm-app
+Group=pm-app
+SupplementaryGroups=pm-db
+WorkingDirectory=/opt/paradiigma/current
+EnvironmentFile=/etc/paradiigma/app.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ExecStartPre=/opt/paradiigma/current/.venv/bin/python scripts/deploy/preflight.py
+ExecStart=/opt/paradiigma/current/.venv/bin/python app.py serve --port 8080
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=45
+UMask=0027
+ProtectSystem=strict
+ReadWritePaths=/var/lib/paradiigma/db
+InaccessiblePaths=-/etc/paradiigma -/var/backups/paradiigma -/var/lib/paradiigma/models
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitCORE=0
+TasksMax=128
+MemoryHigh=2G
+MemoryMax=3G
+CPUQuota=200%
+# Tracebacks on malformed private inputs may contain fragments. Preflight is sanitized.
+StandardOutput=journal
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

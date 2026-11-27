@@ -24,6 +24,16 @@ def external(path):
     return path
 
 
+def external_input(path):
+    # Retain the final component so a nosymfollow input mount can enforce the
+    # policy in the kernel at open time, even if a writer replaces the file.
+    path = Path(path)
+    result = external(path.parent) / path.name
+    if path.name in {"", ".", ".."} or result.is_symlink():
+        raise ValueError("Недопустимый путь к исходному файлу")
+    return result
+
+
 def checksum(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -66,7 +76,7 @@ def write_status(path, fields):
 
 
 def create(database, directory, documents=(), status=None):
-    source, directory = external(database), external(directory)
+    source, directory = external_input(database), external(directory)
     if not source.is_file() or directory == source.parent or directory.is_relative_to(source.parent):
         raise ValueError("Для копии нужен отдельный каталог вне состояния приложения")
     started = utc()
@@ -84,7 +94,7 @@ def create(database, directory, documents=(), status=None):
     version = check_database(copied)
     files = {DB_NAME: checksum(copied)}
     for document in documents:
-        document = external(document)
+        document = external_input(document)
         if (not document.is_file() or document.suffix.casefold() not in DOCUMENT_MIME
                 or document.stat().st_size > 100_000_000 or document.name in {DB_NAME, "manifest.json"}):
             raise ValueError("Недопустимый файл приложения к копии")

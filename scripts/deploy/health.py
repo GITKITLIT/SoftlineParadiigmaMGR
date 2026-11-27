@@ -88,16 +88,26 @@ def storage(path):
                            count(CASE WHEN status='error' THEN 1 END)
                     FROM memory_sync_jobs WHERE kind=?""", (name,)).fetchone()
                 sync[name] = {"last_success": timestamp(ok), "failed_jobs": errors}
-            failures = {}
+            recent = {}
             for source in sources:
-                failures[source] = db.execute("""
+                status_path = "$.sources_status." + source + ".status"
+                failures = db.execute("""
                     SELECT count(*) FROM (SELECT report FROM runs ORDER BY created DESC LIMIT 20)
                     WHERE json_extract(report, ?) IN ('unavailable','error','timeout','partial')
-                    """, ("$.sources_status." + source + ".status",)).fetchone()[0]
+                    """, (status_path,)).fetchone()[0]
+                latest_ok = db.execute("""
+                    SELECT created FROM runs WHERE json_extract(report, ?) = 'ok'
+                    ORDER BY created DESC LIMIT 1
+                    """, (status_path,)).fetchone()
+                recent[source] = {"degraded_in_last_20_runs": failures,
+                                  "last_successful_run": timestamp(latest_ok[0]) if latest_ok else None}
         wal = path.with_name(path.name + "-wal")
+        try:
+            wal_bytes = wal.stat().st_size
+        except FileNotFoundError:
+            wal_bytes = 0
         return {"ok": True, "disk_free_bytes": free, "sqlite_bytes": size,
-                "wal_bytes": wal.stat().st_size if wal.exists() else 0,
-                "sync": sync, "degraded_in_last_20_runs": failures}
+                "wal_bytes": wal_bytes, "sync": sync, "sources": recent}
     except (sqlite3.Error, OSError, ValueError):
         return {"ok": False}
 

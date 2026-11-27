@@ -37,10 +37,13 @@ class OperationsTests(unittest.TestCase):
                 CREATE TABLE runs(created,report);
                 INSERT INTO memory_sync_jobs VALUES('sales','ok','not-a-date-private');
                 INSERT INTO runs VALUES('now','{"secret":"private","sources_status":{"metrika":{"status":"error"}}}');
+                INSERT INTO runs VALUES('2026-01-01T20:00:00+00:00',
+                                        '{"sources_status":{"competitor_web":{"status":"ok"}}}');
             """)
         stats = health.storage(path)
         self.assertTrue(stats["ok"])
-        self.assertEqual(stats["degraded_in_last_20_runs"]["metrika"], 1)
+        self.assertEqual(stats["sources"]["metrika"]["degraded_in_last_20_runs"], 1)
+        self.assertEqual(stats["sources"]["competitor_web"]["last_successful_run"], "2026-01-01T20:00:00+00:00")
         self.assertNotIn("private", json.dumps(stats))
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         status = folder / "status.json"
@@ -65,4 +68,29 @@ class OperationsTests(unittest.TestCase):
                               cwd=folder, capture_output=True, text=True)
         self.assertEqual(scan.returncode, 1)
         self.assertIn("config.txt", scan.stderr)
+        self.assertNotIn(fixture, scan.stderr + scan.stdout)
+
+    def test_scanner_checks_credentials_removed_after_an_unpublished_commit(self):
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+        def git(*args):
+            return subprocess.check_output(["git", "-c", "user.name=Test",
+                                            "-c", "user.email=test@example.com", *args],
+                                           cwd=folder).decode().strip()
+
+        git("init", "-q")
+        git("commit", "--quiet", "--allow-empty", "-m", "Base")
+        base = git("rev-parse", "HEAD")
+        fixture = "ghp_" + "a" * 36
+        file = folder / "settings.txt"
+        file.write_text(fixture)
+        git("add", "settings.txt")
+        git("commit", "--quiet", "-m", "Synthetic credential")
+        git("rm", "--quiet", "settings.txt")
+        git("commit", "--quiet", "-m", "Remove fixture")
+        check = [sys.executable, str(ROOT / "scripts/deploy/scan_index.py")]
+        subprocess.run(check, cwd=folder, capture_output=True, check=True)
+        scan = subprocess.run([*check, "--since", base], cwd=folder, capture_output=True, text=True)
+        self.assertEqual(scan.returncode, 1)
+        self.assertIn("settings.txt", scan.stderr)
         self.assertNotIn(fixture, scan.stderr + scan.stdout)

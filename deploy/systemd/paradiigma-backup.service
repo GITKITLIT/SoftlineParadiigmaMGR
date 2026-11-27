@@ -1,0 +1,36 @@
+[Unit]
+Description=Create and restore-test an independent PARADIIGMA snapshot
+Requires=run-paradiigma_backup_input.mount
+After=run-paradiigma_backup_input.mount
+RequiresMountsFor=/var/backups/paradiigma /opt/paradiigma/current
+
+[Service]
+Type=oneshot
+User=pm-backup
+Group=pm-backup
+SupplementaryGroups=pm-db
+UMask=0077
+Environment=PARADIIGMA_RETENTION_DAYS=14
+ExecStart=/usr/bin/python3 -IB /opt/paradiigma/current/scripts/deploy/backup.py --retain-days ${PARADIIGMA_RETENTION_DAYS}
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ProtectSystem=strict
+ReadWritePaths=/var/backups/paradiigma /var/lib/paradiigma-backup-status
+InaccessiblePaths=/var/lib/paradiigma -/etc/paradiigma -/etc/ssh -/root
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
