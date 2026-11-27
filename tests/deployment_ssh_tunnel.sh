@@ -9,7 +9,7 @@ if getent passwd "$tester" >/dev/null || getent group pm-tunnel >/dev/null; then
     exit 1
 fi
 root=$(cd "$(dirname "$0")/.." && pwd -P)
-tmp=$(mktemp -d)
+tmp=$(mktemp -d /run/paradiigma-ssh.XXXXXXXX)
 sshd_pid=
 cleanup() {
     if [[ -n $sshd_pid ]]; then
@@ -61,8 +61,11 @@ fi
 client=(ssh -F /dev/null -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes
         -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$tmp/known_hosts")
 target="$tester@127.0.0.1"
-"${client[@]}" -i "$tmp/client" -o ExitOnForwardFailure=yes -S "$tmp/control" -MfNT \
-  -L "127.0.0.1:$forward_port:127.0.0.1:8080" "$target"
+if ! "${client[@]}" -i "$tmp/client" -o ExitOnForwardFailure=yes -S "$tmp/control" -MfNT \
+    -L "127.0.0.1:$forward_port:127.0.0.1:8080" "$target"; then
+    cat "$tmp/sshd.log" >&2
+    exit 1
+fi
 curl --noproxy '*' -fsS --max-time 5 -H 'Content-Type: application/json' --data '{}' \
   "http://127.0.0.1:$forward_port/api/analysis/settings" >/dev/null
 "${client[@]}" -S "$tmp/control" -O exit "$target"
