@@ -5,6 +5,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
+from statistics import mean
 from urllib.parse import urlsplit
 
 from .analytics import WEEK, day, weeks
@@ -165,12 +166,13 @@ TOOLS = {
     "competitors": "Фрагменты локальных конкурентных исследований",
     "backlog": "Связанная задача и похожие записи из существующего бэклога",
     "public_competitors": "Конкуренты из явно выбранного публичного каталога",
+    "effect": "Согласованные критерии и последняя сохранённая оценка выбранной задачи",
 }
-FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors")
+FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect")
 
 
 class InvestigationContext:
-    """Per-run evidence ledger. No source is read before its tool is invoked."""
+    """Publish evidence only after its tool runs. Workbook tools share one snapshot."""
 
     def __init__(self, query, request, *, collector=None, meter=None, snapshot_loader=None):
         self.query = query
@@ -188,12 +190,15 @@ class InvestigationContext:
         self.completed = set()
         self.statuses = {key: {"status": "not_checked"} for key in (
             "sales", "funnel", "release", "backlog", "research", "competitor_local",
-            "metrika", "competitor_web",
+            "metrika", "competitor_web", "effect",
         )}
         self.available = dict(TOOLS)
         if not request.get("metrika"):
             self.available.pop("metrika")
             self.statuses["metrika"] = {"status": "disabled", "reason": "not_requested"}
+        if not request.get("task_id"):
+            self.available.pop("effect")
+            self.statuses["effect"] = {"status": "disabled", "reason": "no_task_selected"}
         if not request.get("web") or os.getenv("YANDEX_SEARCH_ENABLED", "").lower() != "true":
             self.available.pop("public_competitors")
             self.statuses["competitor_web"] = {
@@ -229,6 +234,7 @@ class InvestigationContext:
             "competitors": ("competitor_local", lambda: self.research(True)),
             "backlog": ("backlog", self.backlog),
             "public_competitors": ("competitor_web", self.public),
+            "effect": ("effect", self.effect),
         }
         key, handler = handlers[name]
         before = set(self.evidence)
@@ -256,13 +262,19 @@ class InvestigationContext:
         incomplete = False
         for i, series in enumerate(series_rows):
             values = {key: series.get(key) for key in ("before", "after", "delta", "rolling_base")}
+            planned = weeks(*map(day, before))[-4:]
+            weekly_index = {day(point[0]): point[1] for point in series["points"]}
+            previous = [weekly_index.get(date) for date in planned]
+            baseline = mean(previous) if len(previous) == 4 and None not in previous else None
+            baseline_window = [planned[0].isoformat(), planned[-1].isoformat()] if baseline is not None else None
             usable = values["delta"] is not None
             incomplete |= not usable
             self.add(entry(
                 f"orders:{i}", "orders", series["name"], mode=self.mode, unit="index",
                 metric=cfg["metric"], period=periods, filter=snapshot.get("channel"),
                 values=values | {"weeks_before": counts["before"], "weeks_after": counts["after"],
-                                 "alert_percent": cfg["alert_percent"]},
+                                 "alert_percent": cfg["alert_percent"], "baseline_4w": baseline,
+                                 "baseline_window": baseline_window},
                 quality="observed" if usable else "incomplete",
                 source_group="orders_series",
             ))
@@ -360,7 +372,7 @@ class InvestigationContext:
             private = provenance or str(item["id"]).startswith("u-") or os.getenv("PM_EVIDENCE")
             locator = ref
             if isinstance(provenance, dict):
-                locator = {key: safe_locator(provenance[key]) for key in ("file", "sheet", "cell", "paragraph")
+                locator = {key: safe_locator(provenance[key]) for key in ("file", "sheet", "cell", "paragraph", "page", "slide", "part")
                            if key in provenance}
             group = locator.get("file", ref) if isinstance(locator, dict) else ref.split(" · ", 1)[0]
             self.add(entry(identifier, kind, ref, item["text"], mode="local" if private else self.mode,
@@ -389,10 +401,12 @@ class InvestigationContext:
             except (OSError, ValueError):
                 statuses.append(("unavailable", "metric_request_failed"))
                 continue
+            labels = {"visits": "Визиты", "users": "Пользователи", "pageviews": "Просмотры",
+                      "bounceRate": "Отказы", "avgVisitDurationSeconds": "Длительность визита"}
             for key, metric in report.get("metrics", {}).items():
                 quality = "incomplete" if metric["value"] is None else "sampled" if report.get("sampled") else "observed"
                 self.add(entry(
-                    f"metrika:{prefix}{key}", "metrika", key, mode=report["scope"], unit=metric["unit"],
+                    f"metrika:{prefix}{key}", "metrika", labels.get(key, key.replace("_", " ")), mode=report["scope"], unit=metric["unit"],
                     metric=metric["metric"], period=report["period"], filter=report.get("segment"),
                     retrieved_at=report.get("retrieved"), values={"value": metric["value"]},
                     quality=quality, source_group=f"metrika:{report['scope']}",
@@ -409,3 +423,21 @@ class InvestigationContext:
         for item in items:
             self.add(item | {"source_group": f"public:{urlsplit(item['locator']).hostname}"})
         return status, reason
+
+
+    def effect(self):
+        from .ai_store import accepted_task
+
+        task = accepted_task(self.request["task_id"])
+        if not task:
+            return "missing", "no_accepted_task"
+        review = task.get("latest_review")
+        plan = task["effect_plan"]
+        values = {"baseline": plan["baseline"], "target": plan["target"],
+                  "status": review["status"] if review else "waiting_for_data"}
+        if review:
+            values.update(review.get("measurement", {}))
+        self.add(entry("task:effect", "effect", task["title"], task["hypothesis"],
+                       mode=task["data_mode"], values=values, source_group="effect_review",
+                       quality="observed" if review else "incomplete"))
+        return ("ok", None) if review else ("partial", "waiting_for_data")

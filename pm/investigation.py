@@ -1,23 +1,35 @@
 """Build a grounded report, falling back to repeatable server-side analysis."""
 import os
+import re
 import time
 from uuid import uuid4
 
 from . import ai_store, qwen
-from .agent import investigate
+from .agent import investigate, off_topic
 from .analysis_context import InvestigationContext
 from .cross_analysis import correlate, strengthen
+from .product_decisions import task_proposals
 
 
-def analyze(request, *, collector=None, meter=None, decide=None, infer=None, persist=True):
+def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
+            snapshot_loader=None, previous=None, persist=True):
     started = time.perf_counter()
     query = request.get("query", "")
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
-    context = InvestigationContext(query, request, collector=collector, meter=meter)
+    context = InvestigationContext(query, request, collector=collector, meter=meter,
+                                   snapshot_loader=snapshot_loader)
     planner = decide if decide is not None else qwen.planner() if infer is None else None
-    trace, planning_usage, termination = investigate(context, planner)
+    screened = off_topic(query)
+    if screened:
+        trace, planning_usage, termination = [{"step": "scope", "status": "out_of_scope", "actor": "server"}], {}, "out_of_scope"
+    else:
+        trace, planning_usage, termination = investigate(context, planner)
+    if termination != "out_of_scope" and context.evidence and "backlog" not in context.completed:
+        check = context.run("backlog", {})
+        trace.append({"step": "tool", "tool": "backlog", "actor": "server",
+                      "purpose": "approval_prerequisite", "arguments": {}, "seconds": 0, **check})
     mode, evidence = context.mode, list(context.evidence.values())
     statuses, limits, matches = context.statuses, context.limits, context.matches
     gathered = time.perf_counter() - started
@@ -39,16 +51,25 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
                 confidence="low" if item["quality"] == "incomplete" else "medium",
                 statement_type="fact", checks=["Сверить покрытие с журналом сбора."],
             ))
+    core = next((item for item in evidence if item["kind"] == "orders"), None)
+    control = next((item for item in evidence if item["id"] == "orders:1"), None)
+    delta = core["values"]["delta"] if core else None
+    measurement_question = query.casefold().startswith(("есть ли снижение ", "оцени масштаб "))
+    skip_synthesis = measurement_question and (delta is None or delta >= 0) and not any(
+        keyword in query.casefold() for keyword in ("почему", "гипотез", "конкурент", "интервью")
+    )
     if termination == "out_of_scope":
         evidence, findings, matches, limits = [], [], [], []
-        status, hypotheses, usage, reason = "ok", [], {}, None
+        core, control = None, None
+        trace = [{**event, "evidence_ids": []} if event["step"] == "tool" else event for event in trace]
+        status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
+    elif skip_synthesis:
+        status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
     elif infer is not None:
         status, hypotheses, usage, reason = infer(query, evidence)
     else:
         status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False, facts=findings)
     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
-    core = next((item for item in evidence if item["kind"] == "orders"), None)
-    control = next((item for item in evidence if item["id"] == "orders:1"), None)
     if termination == "out_of_scope":
         summary = "Вопрос за пределами продуктовой аналитики."
     elif core is None or core["values"]["delta"] is None:
@@ -57,6 +78,12 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
         summary = "Снижение среднего индекса достигло порога. Причина требует проверки."
     else:
         summary = "Снижение среднего индекса не достигло заданного порога."
+    if status == "ok" and core and core["values"]["delta"] is not None and core["values"]["delta"] >= 0:
+        spurious = re.compile(r"(паден|снижен|упал).{0,30}заказ|заказ.{0,30}(сниз|упал|паден)", re.I)
+        kept = [item for item in hypotheses if not spurious.search(item["problem"])]
+        if len(kept) < len(hypotheses):
+            limits.append("Отклонена гипотеза, описание которой заявляло падение заказов без сигнала в данных.")
+        hypotheses = kept
     if status != "ok" and not hypotheses and core and core["values"]["delta"] is not None and core["values"]["delta"] < 0:
         hypotheses = [dict(
             problem="Снижение индекса заказов", cause="Изменение поведения или измерения требует проверки",
@@ -65,35 +92,39 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
             missing="Нужны наблюдения по шагам воронки", risk="Изменение состава покупателей",
             evidence_ids=[core["id"]], contradictions=[], confidence="low",
         )]
+        release = next((row for row in evidence if row["id"] == "release:current"), None)
+        if release:
+            hypotheses.append(dict(
+                problem="Возможный барьер после изменения продукта",
+                cause="Изменение могло затронуть переход к оформлению в основной группе",
+                verify="Сравнить один и тот же путь покупки для затронутой и незатронутой групп",
+                expected="Если барьер связан с изменением, он воспроизводится только на затронутом пути",
+                missing="Нужны описание изменения и группы его выката",
+                risk="Другие изменения могли повлиять на поведение покупателей",
+                evidence_ids=[core["id"], release["id"]], contradictions=[], confidence="low",
+            ))
     strengthen(hypotheses, evidence)
     for item in hypotheses:
         item["alternative_explanations"] = [other["cause"] for other in hypotheses if other is not item] or [
             "Проверить ошибку измерения, охват релиза и изменение состава аудитории."
         ]
-        item["business_impact"] = "Проверить влияние на самостоятельные заказы до оценки эффекта."
+        item["business_impact"] = (
+            "Проверить влияние на самостоятельные заказы до оценки эффекта." if core
+            else "Проверить влияние на выбранный продуктовый сценарий."
+        )
     effect_plan = dict(
         primary_kpi="orders_index_4w",
-        baseline=core["values"]["rolling_base"] if core else None,
+        baseline=core["values"]["baseline_4w"] if core else None,
         target=None, target_basis="Согласовать цель после проверки разброса индекса в базовом периоде.",
-        baseline_period=core["period"]["before"] if core else None,
-        guardrails=["Контрольный ряд" ] if control else [],
-        control_baseline=control["values"]["rolling_base"] if control else None,
+        baseline_period=core["values"]["baseline_window"] if core else None,
+        guardrails=["Контрольный ряд"] if control else [],
+        control_baseline=control["values"]["baseline_4w"] if control else None,
         observation_weeks=4,
         stop_condition="Пересмотреть гипотезу при отсутствии улучшения или ухудшении контрольного показателя.",
     )
-    proposals = [
-        dict(id=f"proposal-{i + 1}", title=item["problem"], hypothesis=item["cause"],
-             verification=item["verify"], expected=item["expected"], risks=item["risk"],
-             segment=core["ref"] if core else "Не выбран", evidence_ids=item["evidence_ids"],
-             criteria=[item["verify"], "Согласовать основную метрику, цель и окно наблюдения перед разработкой."],
-             alternatives=item["alternative_explanations"],
-             tag=ai_store.TASK_TAG, priority={
-                 "impact": "Проверка потерь заказов" if core else "Уточнение проблемы",
-                 "evidence_strength": item["confidence"], "effort": "unknown",
-                 "dependencies": [item["missing"]],
-             })
-        for i, item in enumerate(hypotheses)
-    ]
+    proposals = [proposal | {"tag": ai_store.TASK_TAG} for proposal in task_proposals(
+        hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
+    )]
     elapsed = time.perf_counter() - started
     report = dict(
         run_id=uuid4().hex, llm_status=status, data_mode=mode, sources_status=statuses,
@@ -111,8 +142,21 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
         mode="Локальная Qwen" if status == "ok" else "Расчёт и поиск",
         model=os.getenv("PM_LLM_MODEL", "qwen3-4b") if status == "ok" else None,
         notice=("Модель не подключена или ответ не прошёл проверку. Показан расчёт и поиск."
-                if status != "ok" else ""),
+                if status not in {"ok", "not_needed"} else ""),
     )
+    report["request_context"] = {key: request[key] for key in ("query", "config", "metrika", "web", "task_id")
+                                 if key in request}
+    if previous:
+        report["previous_run_id"] = previous["run_id"]
+        old = {item["id"]: item for item in previous["evidence"]}
+        new = {item["id"]: item for item in evidence}
+        report["evidence_changes"] = {
+            "added": sorted(new.keys() - old.keys()),
+            "removed": sorted(old.keys() - new.keys()),
+            "updated": sorted(ref for ref in new.keys() & old.keys() if any(
+                new[ref].get(field) != old[ref].get(field) for field in ("values", "text", "quality", "period")
+            )),
+        }
     if status == "ok" and hypotheses:
         report.update(hypothesis=hypotheses[0]["cause"], proposal=hypotheses[0]["verify"],
                       refs=hypotheses[0]["evidence_ids"])

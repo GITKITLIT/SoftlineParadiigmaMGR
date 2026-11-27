@@ -116,6 +116,7 @@ with TemporaryDirectory() as d:
             t.locator("#infer").click()
             expect(t.locator("#ai")).to_contain_text("Модель не подключена")
             expect(t.locator("#runDetails")).to_contain_text("Доступность источников")
+            expect(t.locator("#runDetails")).to_contain_text("Действия агента")
             expect(t.locator("#runDetails")).to_contain_text("Гипотезы по правилам")
             proposal = t.locator("#runDetails form").first
             proposal.get_by_label("Целевой индекс").fill("110")
@@ -125,6 +126,8 @@ with TemporaryDirectory() as d:
             t.get_by_text("Журнал и задачи").click()
             t.locator("#reloadRuns").click()
             expect(t.locator("#serverTasks")).to_contain_text("согласована")
+            t.locator("#dailyDigest").click()
+            expect(t.locator("#digestStatus")).to_contain_text("Синтетические · расследований 1")
             t.locator("#serverTasks input").first.set_input_files({
                 "name": "simulation.json", "mimeType": "application/json",
                 "buffer": (root / "data/effect-demo.json").read_bytes(),

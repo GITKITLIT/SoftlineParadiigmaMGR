@@ -453,7 +453,9 @@ $("#infer").onclick = async (e) => {
       query: $("#search").elements.query.value,
       config: data.config,
     };
-    if ($("#includeMeter").checked) request.metrika = values($("#meter"));
+    if ($("#includeMeter").checked) {
+      request.metrika = $("#compareMeter").checked ? { compare: true } : values($("#meter"));
+    }
     if ($("#publicProduct").value) {
       const selected = (id) => Array.from($(id).selectedOptions, (o) => o.value);
       request.web = { product: $("#publicProduct").value,
@@ -490,8 +492,18 @@ function renderInvestigation(report) {
   container.replaceChildren();
   text("#runSummary", report ? report.summary : "Собираем доказательства…");
   if (!report) return;
+  const competitorList = $("#competitorEvidence"), releaseList = $("#releaseEvidence");
+  const comparisons = report.evidence.filter((item) => ["competitor_local", "competitor_web"].includes(item.kind));
+  const releases = report.evidence.filter((item) => item.kind === "release");
+  competitorList.replaceChildren(...(comparisons.length
+    ? comparisons.map((item) => evidenceLinks(item.ref + " · " + item.quality + " · " +
+      (item.freshness === "recent" ? "свежий источник" : "актуальность требует проверки"), [item.id]))
+    : [node("p", "Подходящих конкурентных материалов в отчёте нет.")]));
+  releaseList.replaceChildren(...(releases.length
+    ? releases.map((item) => evidenceLinks(item.ref + " · " + (item.observed_at || "дата неизвестна"), [item.id]))
+    : [node("p", "Релизы в отчёте отсутствуют.")]));
   const status = { ok: "доступен", partial: "частично", disabled: "выключен",
-    missing: "нет данных", unavailable: "недоступен", error: "ошибка" };
+    missing: "нет данных", unavailable: "недоступен", error: "ошибка", not_checked: "ещё не проверен" };
   const section = (heading) => {
     const block = node("section", "");
     block.append(node("h4", heading));
@@ -501,7 +513,8 @@ function renderInvestigation(report) {
   const sourceBlock = section("Доступность источников");
   const labels = {sales: "Продажи", research: "Исследования", release: "Релиз",
     backlog: "Бэклог", competitor_web: "Конкуренты в интернете",
-    competitor_local: "Локальные данные о конкурентах", metrika: "Яндекс.Метрика"};
+    competitor_local: "Локальные данные о конкурентах", metrika: "Яндекс.Метрика",
+    effect: "Замер после выпуска"};
   for (const [name, value] of Object.entries(report.sources_status)) {
     sourceBlock.append(node("p", (labels[name] || name) + " · " + (status[value.status] || value.status)));
   }
@@ -510,7 +523,7 @@ function renderInvestigation(report) {
     const history = section("Действия агента");
     const tools = { sales: "Продажи и контроль", funnel: "Воронка", metrika: "Метрика",
       releases: "Релизы", research: "Исследования", competitors: "Конкуренты",
-      backlog: "Бэклог", public_competitors: "Публичные источники" };
+      backlog: "Бэклог", public_competitors: "Публичные источники", effect: "Оценка эффекта" };
     for (const step of steps) {
       history.append(evidenceLinks(
         (tools[step.tool] || step.tool) + " · " + (status[step.status] || step.status) +
@@ -528,8 +541,13 @@ function renderInvestigation(report) {
     row.append(node("p", "Ожидаемый результат · " + item.expected));
     row.append(node("p", "Нужны данные · " + item.missing));
     row.append(node("p", "Риск · " + item.risk));
+    if (item.alternative_explanations?.length) {
+      row.append(node("p", "Альтернативы · " + item.alternative_explanations.join(" · ")));
+    }
+    if (item.business_impact) row.append(node("p", "Влияние · " + item.business_impact));
     row.append(node("p", "Уверенность · " + ({low: "низкая", medium: "средняя", high: "высокая"}[item.confidence])));
     if (item.contradictions.length) row.append(evidenceLinks("Противоречия", item.contradictions));
+    if (item.citation_ambiguities?.length) row.append(evidenceLinks("Неоднозначные ссылки", item.citation_ambiguities));
     hypotheses.append(row);
   }
   if (!report.hypotheses.length) hypotheses.append(node("p", "Проверяемых гипотез нет."));
@@ -538,6 +556,27 @@ function renderInvestigation(report) {
   if (report.backlog_matches.length) {
     const backlog = section("Похожие задачи");
     for (const item of report.backlog_matches) backlog.append(node("p", item.id + " · " + item.title));
+  }
+  if (report.evidence_changes) {
+    const change = report.evidence_changes;
+    const updates = section("Изменения доказательств");
+    for (const [label, refs] of [["Новые", change.added], ["Обновлённые", change.updated]]) {
+      if (refs.length) updates.append(evidenceLinks(label, refs));
+    }
+    if (change.removed.length) updates.append(node("p", "Убраны из контекста · " + change.removed.join(", ")));
+    if (!change.added.length && !change.updated.length && !change.removed.length) {
+      updates.append(node("p", "Состав доказательств и показатели не изменились."));
+    }
+  }
+  if (report.request_context && !offline) {
+    const again = node("button", "Повторить с текущими данными");
+    again.onclick = async () => {
+      again.disabled = true;
+      try { renderInvestigation(await api("analysis/reopen", { run_id: report.run_id })); }
+      catch (error) { flash(error.message); }
+      finally { again.disabled = false; }
+    };
+    container.append(again);
   }
   if (report.proposed_tasks.length) {
     const tasks = section("Предложения в бэклог");
@@ -583,6 +622,12 @@ function proposalForm(report, item) {
   form.append(node("strong", item.title), node("p", item.tag),
     node("p", "Исходный четырёхнедельный индекс · " + fmt(baseline)),
     node("p", item.priority.impact + " · " + item.verification));
+  if (item.existing_tasks?.length) {
+    for (const existing of item.existing_tasks) {
+      form.append(node("p", "Проверить приоритет существующей задачи · " + existing.id + " · " + existing.title));
+    }
+  }
+  if (report.effect_plan.target_basis) form.append(node("p", report.effect_plan.target_basis));
   const label = node("label", "Целевой индекс");
   const target = document.createElement("input");
   target.type = "number";
@@ -595,15 +640,21 @@ function proposalForm(report, item) {
   control.min = "0";
   control.step = ".01";
   controlLabel.append(control);
+  const stopLabel = node("label", "Порог отказа от дальнейшей разработки");
+  const stop = document.createElement("input");
+  stop.type = "number";
+  stop.min = "0";
+  stop.step = ".01";
+  stopLabel.append(stop);
   const accept = node("button", "Согласовать");
   accept.disabled = baseline == null;
   const reject = node("button", "Отклонить");
   reject.type = "button";
   const output = node("p", "");
   output.setAttribute("role", "status");
-  form.append(label, controlLabel, accept, reject, output);
+  form.append(label, controlLabel, stopLabel, accept, reject, output);
   const submit = async (action) => {
-    if (action === "accept" && (!target.value || !target.checkValidity() || !control.checkValidity())) {
+    if (action === "accept" && (!target.value || !target.checkValidity() || !control.checkValidity() || !stop.checkValidity())) {
       output.textContent = "Укажите корректную численную цель.";
       return;
     }
@@ -613,6 +664,7 @@ function proposalForm(report, item) {
         run_id: report.run_id, proposal_id: item.id, action,
         target: action === "accept" ? Number(target.value) : null,
         control_min: action === "accept" && control.value ? Number(control.value) : null,
+        stop_if_below: action === "accept" && stop.value ? Number(stop.value) : null,
         idempotency_key: report.run_id + "/" + item.id + "/" + action,
       });
       output.textContent = action === "accept" ? "Задача согласована в локальном бэклоге." : "Предложение отклонено.";
@@ -626,6 +678,23 @@ function proposalForm(report, item) {
   form.onsubmit = (event) => { event.preventDefault(); submit("accept"); };
   reject.onclick = () => submit("reject");
   return form;
+}
+
+function effectReviewText(review) {
+  const details = [review.mode === "simulation" ? "Симуляция" : "",
+    review.recommendation];
+  if (review.measurement) {
+    details.push("Новый индекс " + fmt(review.measurement.kaspersky) + " при цели " + fmt(review.plan.target));
+    if (review.control_adjusted_change_pp != null) {
+      details.push("Разница изменений с контролем " + fmt(review.control_adjusted_change_pp) + " п. п.");
+    }
+  }
+  for (const guard of review.side_effects || []) {
+    if (guard.status !== "ok") details.push("Контроль " + guard.metric + " — " +
+      (guard.status === "missing" ? "нет замера" : "ниже минимума"));
+  }
+  if (review.external_factors?.length) details.push("Внешние факторы · " + review.external_factors.join(", "));
+  return details.filter(Boolean).join(" · ");
 }
 
 async function reloadRuns() {
@@ -673,10 +742,10 @@ async function reloadRuns() {
               task_id: item.id, observation: JSON.parse(await picked.text()),
               mode: item.data_mode === "synthetic" ? "simulation" : "actual",
             });
-            status.textContent = (review.mode === "simulation" ? "Симуляция · " : "") + review.recommendation;
+            status.textContent = effectReviewText(review);
           } catch (error) { status.textContent = error.message; }
         };
-        if (item.latest_review) status.textContent = item.latest_review.recommendation;
+        if (item.latest_review) status.textContent = effectReviewText(item.latest_review);
         row.append(label, status);
       }
       tasks.append(row);
@@ -690,6 +759,14 @@ $("#openInvestigation").onclick = () => {
   $("#infer").click();
 };
 $("#reloadRuns").onclick = reloadRuns;
+$("#dailyDigest").onclick = async () => {
+  try {
+    const digest = await api("analysis/daily", {});
+    const lines = [["Рабочие данные", digest.groups.local], ["Синтетические", digest.groups.synthetic]];
+    text("#digestStatus", digest.date_utc + " UTC · " + lines.map(([label, group]) =>
+      label + " · расследований " + group.runs + ", на проверке " + group.pending_review).join(" · "));
+  } catch (error) { text("#digestStatus", error.message); }
+};
 $("#checkNow").onclick = async () => {
   $("#checkNow").disabled = true;
   try {

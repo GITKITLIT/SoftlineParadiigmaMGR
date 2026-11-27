@@ -5,6 +5,9 @@ import json
 import os
 import re
 import time
+import unicodedata
+from collections import Counter
+from math import log
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 from urllib.parse import urlparse
@@ -21,13 +24,19 @@ OPTIONS = {
 }
 
 
-def index_range(path, sheet, area, kind, target=None):
-    target = target if target is not None else private_dir() / "sources.json"
-    if sheet.strip().casefold() == "эталонный_кейс" or kind not in (
-        "Интервью",
-        "Конкуренты",
-        "Бэклог",
-    ):
+def reference_is_excluded(value):
+    if not isinstance(value, str):
+        return False
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "эталонныйкейс" in re.sub(r"[^а-яёa-z0-9]+", "", normalized)
+
+
+def kind_is_supported(kind):
+    return kind in ("Интервью", "Конкуренты", "Бэклог")
+
+
+def range_excerpts(path, sheet, area, kind):
+    if reference_is_excluded(sheet) or not kind_is_supported(kind):
         raise ValueError("Выберите исследовательский лист и тип источника")
     c1, r1, c2, r2 = range_boundaries(area)
     if None in (c1, r1, c2, r2) or (c2 - c1 + 1) * (r2 - r1 + 1) > 4000 or r2 > 10000:
@@ -47,7 +56,7 @@ def index_range(path, sheet, area, kind, target=None):
                     ref = f"{doc} · {sheet}!{cell.coordinate}"
                     items.append(
                         dict(
-                            id=hashlib.sha256(ref.encode()).hexdigest()[:18],
+                            id=hashlib.sha256((kind + "|" + ref).encode()).hexdigest()[:18],
                             ref=ref,
                             locator={"file": Path(path).name, "sheet": sheet, "cell": cell.coordinate},
                             kind=kind,
@@ -56,6 +65,14 @@ def index_range(path, sheet, area, kind, target=None):
                     )
     finally:
         book.close()
+    return items
+
+
+def index_range(path, sheet, area, kind, target=None):
+    items = range_excerpts(path, sheet, area, kind)
+    if target is None:
+        from .ai_store import store_excerpts
+        return store_excerpts(f"excel:{Path(path).name}:{sheet}:{area}:{kind}", items)
     target.parent.mkdir(exist_ok=True, parents=True)
     current = {
         x["id"]: x
@@ -75,12 +92,25 @@ def index_range(path, sheet, area, kind, target=None):
 def evidence():
     external = os.getenv("PM_EVIDENCE")
     path = Path(external) if external else ROOT / "data/demo-evidence.json"
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return visible_excerpts(json.loads(path.read_text(encoding="utf-8-sig")))
+
+
+def visible_excerpts(items):
+    return [
+        item for item in items
+        if not reference_is_excluded(item.get("ref"))
+        and not (isinstance(item.get("locator"), dict) and any(
+            reference_is_excluded(item["locator"].get(key)) for key in ("file", "sheet")
+        ))
+    ]
 
 
 def imported_sources():
+    from .ai_store import stored_excerpts
+
     local = private_dir() / "sources.json"
-    return json.loads(local.read_text(encoding="utf8")) if local.exists() else []
+    old = json.loads(local.read_text(encoding="utf8")) if local.exists() else []
+    return visible_excerpts(list({item["id"]: item for item in old + stored_excerpts()}.values()))
 
 
 def sources():
@@ -92,22 +122,38 @@ def tokens(text):
 
 
 def search(query, items):
-    words = tokens(query)
-    related = (("корзина", "checkout", "оформление", "покупка"),
-               ("лицензия", "license", "подписка"),
-               ("интервью", "респондент", "исследование"),
-               ("событие", "аналитика", "метрика"))
+    words = tokens(query) - tokens("почему какой какие что проверить показать оценить")
+    if not words:
+        return []
+    related = (
+        ("корзина", "checkout", "оформление", "покупка", "доставка"),
+        ("лицензия", "license", "подписка", "тариф"),
+        ("интервью", "респондент", "исследование", "custdev"),
+        ("событие", "аналитика", "метрика", "цель", "конверсия"),
+        ("заказ", "продажи", "orders", "выручка"),
+    )
     expanded = set().union(*(tokens(" ".join(group)) for group in related
                              if words & tokens(" ".join(group)))) - words
-    scored = []
+    documents, occurrences = [], Counter()
     for i, item in enumerate(items):
-        content = tokens(item["text"] + " " + item["kind"] + " " + item["ref"])
-        score = 2 * len(words & content) + len(expanded & content)
-        if score:
-            scored.append((score, i, item))
-    return [x for score, _, x in sorted(scored, key=lambda v: (-v[0], v[1])) if score][
-        :12
-    ]
+        headline = tokens(item["ref"] + " " + item["kind"])
+        content = tokens(item["text"])
+        relevant = (words | expanded) & (content | headline)
+        if relevant:
+            occurrences.update(relevant)
+            documents.append((i, item, headline, content, relevant))
+    total = len(items)
+    scored = []
+    query_words = len(words)
+    for i, item, headline, content, relevant in documents:
+        score = sum(
+            (2.5 if term in words else 0.75) * (1.35 if term in headline else 1) *
+            log(1 + (total - occurrences[term] + 0.5) / (occurrences[term] + 0.5))
+            for term in relevant
+        )
+        score += 1.5 * len(content & words) / query_words
+        scored.append((score, i, item))
+    return [item for _, _, item in sorted(scored, key=lambda row: (-row[0], row[1]))[:12]]
 
 
 def analyze(query, overview, endpoint=None):

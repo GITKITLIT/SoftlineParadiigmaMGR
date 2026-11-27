@@ -1,5 +1,6 @@
 """Private SQLite storage for investigations, approvals and effect reviews."""
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ def database():
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("BEGIN IMMEDIATE")
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3):
+        if version not in (0, 1, 2, 3, 4):
             raise ValueError("Версия хранилища неизвестна")
         if version == 0:
             db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created TEXT NOT NULL, report TEXT NOT NULL)")
@@ -53,11 +54,34 @@ def database():
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS queue_status ON investigation_queue(status, created)")
             db.execute("PRAGMA user_version=3")
+        if version < 4:
+            db.execute("""CREATE TABLE IF NOT EXISTS imported_evidence (
+                id TEXT PRIMARY KEY, collection TEXT NOT NULL, body TEXT NOT NULL
+            )""")
+            db.execute("CREATE INDEX IF NOT EXISTS evidence_collection ON imported_evidence(collection)")
+            db.execute("PRAGMA user_version=4")
         yield db
         db.commit()
     finally:
         db.close()
 
+
+
+def store_excerpts(collection, items):
+    with database() as db:
+        db.execute("DELETE FROM imported_evidence WHERE collection=?", (collection,))
+        db.executemany("""INSERT INTO imported_evidence VALUES (?, ?, ?)
+                          ON CONFLICT(id) DO UPDATE SET collection=excluded.collection, body=excluded.body""",
+                       [(row["id"], collection, dumps(row)) for row in items])
+    return len(items)
+
+
+def stored_excerpts():
+    path = private_dir() / "ai.sqlite3"
+    if not path.exists():
+        return []
+    with database() as db:
+        return [json.loads(row["body"]) for row in db.execute("SELECT body FROM imported_evidence")]
 
 def save_run(report):
     with database() as db:
@@ -99,14 +123,33 @@ def decide(request):
     guardrail = request.get("control_min")
     if guardrail is not None:
         guardrail = finite(guardrail)
-    fingerprint = hashlib.sha256(dumps([run_id, proposal_id, action, target, guardrail]).encode()).hexdigest()
+    guards = request.get("guardrail_metrics") or {}
+    if not isinstance(guards, dict) or len(guards) > 5 or any(
+        not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", name)
+        for name in guards
+    ):
+        raise ValueError("Передайте до пяти именованных контрольных показателей")
+    guards = {name: finite(value) for name, value in guards.items()}
+    if guards and action != "accept":
+        raise ValueError("Контрольные показатели задаются при согласовании")
+    stop_if_below = request.get("stop_if_below")
+    if stop_if_below is not None:
+        stop_if_below = finite(stop_if_below)
+        if action != "accept" or stop_if_below > target:
+            raise ValueError("Порог остановки должен быть не выше цели")
     report = run(run_id)
     proposal = next((p for p in report["proposed_tasks"] if p["id"] == proposal_id), None)
     if proposal is None:
         raise ValueError("Предложение не найдено")
-    plan = report["effect_plan"]
+    plan = proposal.get("plan") or report["effect_plan"]
+    if action == "accept" and not proposal.get("backlog_verified", True):
+        raise ValueError("Сначала проверьте существующий бэклог")
     if action == "accept" and (plan["baseline"] is None or target <= 0):
         raise ValueError("Для согласования нужны исходный уровень и положительная цель")
+    identity = [run_id, proposal_id, action, target, guardrail]
+    if stop_if_below is not None or guards:
+        identity.extend([stop_if_below, guards])
+    fingerprint = hashlib.sha256(dumps(identity).encode()).hexdigest()
     with database() as db:
         previous = db.execute("SELECT fingerprint, task_id FROM idempotency WHERE key=?", (key,)).fetchone()
         if previous and previous["fingerprint"] != fingerprint:
@@ -119,7 +162,8 @@ def decide(request):
         else:
             record = proposal | dict(
                 id=uuid4().hex, run_id=run_id, proposal_id=proposal_id, decision=action,
-                effect_plan=plan | {"target": target, "control_min": guardrail},
+                effect_plan=plan | {"target": target, "control_min": guardrail, "stop_if_below": stop_if_below,
+                                    "guardrail_metrics": guards},
                 data_mode=report["data_mode"], redmine_status="not_configured",
                 fingerprint=fingerprint, created=now(),
             )
@@ -142,6 +186,19 @@ def task_list():
         ]
 
 
+def accepted_task(task_id):
+    if not isinstance(task_id, str) or len(task_id) > 120:
+        raise ValueError("Некорректный идентификатор задачи")
+    with database() as db:
+        row = db.execute("""SELECT t.body, (
+            SELECT r.body FROM reviews AS r WHERE r.task_id=t.id
+            ORDER BY r.created DESC LIMIT 1
+        ) AS last_review FROM tasks t WHERE t.id=? AND t.action='accept'""", (task_id,)).fetchone()
+    if not row:
+        return None
+    return json.loads(row["body"]) | {"latest_review": json.loads(row["last_review"]) if row["last_review"] else None}
+
+
 def review(request):
     import hashlib
     from .analytics import WEEK, day, effect
@@ -159,7 +216,8 @@ def review(request):
             raise ValueError("Задача не согласована")
         task = json.loads(row[0])
         plan = task["effect_plan"]
-        result = dict(status="waiting_for_data", mode=mode, task_id=task_id, plan=plan)
+        result = dict(status="waiting_for_data", mode=mode, task_id=task_id, plan=plan,
+                      hypothesis=task["hypothesis"], limitations=[])
         if observation:
             if not isinstance(observation, dict) or not isinstance(observation.get("rows"), list):
                 raise ValueError("Передайте окно оценки и массив недель")
@@ -172,16 +230,37 @@ def review(request):
                 today = datetime.now(timezone.utc).date()
                 if any(row.get("complete") is True and day(row["week"]) + WEEK > today for row in rows):
                     raise ValueError("Полная неделя должна закончиться до даты проверки")
-            computed = effect(rows, observation["fix"], plan["target"])
+            factors = observation.get("external_factors", [])
+            if (not isinstance(factors, list) or len(factors) > 8 or
+                    any(not isinstance(item, str) or not 1 <= len(item) <= 180 for item in factors)):
+                raise ValueError("Внешние факторы передаются списком из коротких описаний")
+            result["release_date"] = day(observation["fix"]).isoformat()
+            result["external_factors"] = factors
+            computed = effect(rows, observation["fix"], plan["target"], allow_missing_values=True)
             if "start" in computed:
                 result["measurement"] = {k: v for k, v in computed.items() if k != "status"}
                 core = computed["kaspersky"]
                 control = computed["astra"]
                 result["change_from_baseline"] = core - plan["baseline"]
-                result["control_change"] = control - plan["control_baseline"] if plan["control_baseline"] is not None else None
+                result["control_change"] = (
+                    control - plan["control_baseline"]
+                    if control is not None and plan["control_baseline"] is not None else None
+                )
+                if result["control_change"] is None:
+                    result["limitations"].append("Контрольное сравнение недоступно.")
+                elif plan["baseline"]:
+                    before_core = (core / plan["baseline"] - 1) * 100
+                    before_control = plan["control_baseline"]
+                    if before_control:
+                        result["control_adjusted_change_pp"] = before_core - (control / before_control - 1) * 100
                 limit = plan["control_min"]
-                if limit is not None and control < limit:
+                stop = plan.get("stop_if_below")
+                result["side_effects"] = compare_guardrails(plan, observation, computed)
+                blocked = any(item["status"] != "ok" for item in result["side_effects"])
+                if factors or blocked or (limit is not None and (control is None or control < limit)):
                     status = "inconclusive"
+                elif stop is not None and core < stop:
+                    status = "stop_condition_met"
                 elif core >= plan["target"]:
                     status = "achieved"
                 elif core > plan["baseline"]:
@@ -194,13 +273,34 @@ def review(request):
             "achieved": "Рассмотреть закрытие после проверки",
             "partial": "Доработать",
             "not_achieved": "Пересмотреть гипотезу",
-            "inconclusive": "Проверить контроль и качество данных",
+            "inconclusive": "Проверить контроль, внешние факторы и качество данных",
+            "stop_condition_met": "Рассмотреть отказ от дальнейшей разработки по согласованному порогу",
         }[result["status"]]
         if observation and mode == "actual":
             fingerprint = hashlib.sha256(dumps(observation).encode()).hexdigest()
             db.execute("INSERT OR IGNORE INTO reviews VALUES (?, ?, ?, ?)",
                        (task_id, fingerprint, now(), dumps(result)))
         return result
+
+
+def compare_guardrails(plan, observation, measurement):
+    from .analytics import finite
+
+    submitted = observation.get("guardrails") or {}
+    if not isinstance(submitted, dict):
+        raise ValueError("Контрольные наблюдения передаются объектом")
+    results = []
+    for name, minimum in plan.get("guardrail_metrics", {}).items():
+        item = submitted.get(name)
+        row = dict(metric=name, minimum=minimum, status="missing", baseline=None, after=None)
+        if isinstance(item, dict) and (item.get("start"), item.get("end")) == (measurement["start"], measurement["end"]):
+            baseline = item.get("baseline")
+            after = item.get("after")
+            if after is not None:
+                row.update(after=finite(after), baseline=finite(baseline) if baseline is not None else None,
+                           status="ok" if after >= minimum else "below_minimum")
+        results.append(row)
+    return results
 
 
 def record_check(signature, status, delta, *, enqueue=False):
@@ -260,6 +360,28 @@ def notifications():
             ORDER BY created DESC LIMIT 20
         """)]
 
+
+def daily_digest():
+    """UTC daily view with independent local and synthetic buckets."""
+    start = datetime.now(timezone.utc).date().isoformat()
+    with database() as db:
+        daily = {"local": {"runs": 0, "with_hypotheses": 0, "pending_review": 0, "recent_ids": []},
+                 "synthetic": {"runs": 0, "with_hypotheses": 0, "pending_review": 0, "recent_ids": []}}
+        rows = db.execute("""
+            SELECT runs.id, runs.report, COUNT(tasks.id) AS reviews FROM runs
+            LEFT JOIN tasks ON tasks.run_id=runs.id WHERE runs.created >= ?
+            GROUP BY runs.id ORDER BY runs.created DESC LIMIT 100
+        """, (start,))
+        for row in rows:
+            report = json.loads(row["report"])
+            group = daily[report["data_mode"]]
+            group["runs"] += 1
+            group["with_hypotheses"] += bool(report["hypotheses"])
+            group["pending_review"] += len(report["proposed_tasks"]) > row["reviews"]
+            if len(group["recent_ids"]) < 5:
+                group["recent_ids"].append(row["id"])
+        return {"date_utc": start, "groups": daily, "limit": 100}
+
 def public_report(run_id):
     report = run(run_id)
     return {
@@ -284,5 +406,10 @@ def redmine_export(task_id):
         "KPI · " + plan["primary_kpi"], "Цель · " + str(plan["target"]),
         "Тег · " + TASK_TAG,
     ])
+    existing = task.get("existing_tasks") or []
+    if task.get("action") == "review_existing_priority" and existing:
+        return {"status": "pending", "action": "review_existing_priority",
+                "local_task_id": task["id"], "tag": TASK_TAG,
+                "existing_task_ids": [item["id"] for item in existing], "assessment": description}
     return {"status": "pending", "local_task_id": task["id"], "tag": TASK_TAG,
             "payload": {"issue": {"subject": task["title"], "description": description}}}

@@ -39,10 +39,9 @@ class InvestigationTests(unittest.TestCase):
                     content = json.dumps({"action": "finish_enough" if tool == "finish" else tool})
                 else:
                     content = "broken-json" if len(seen) == steps + 1 else json.dumps({"hypotheses": [{
-                    "problem": "Падение индекса заказов", "cause": "Возможна потеря события",
+                    "cause": "Возможна потеря события",
                     "verify": "Сверить регистрацию события после выбора лицензии",
                     "expected": "Появится проверяемая последовательность событий",
-                    "missing": "Нет разреза корзины", "risk": "Изменение состава аудитории",
                     "evidence_ids": ["orders:0"], "contradictions": ["orders:1"],
                     }]})
                 response = json.dumps({"choices": [{"message": {"content": content}}],
@@ -72,7 +71,7 @@ class InvestigationTests(unittest.TestCase):
         self.assertEqual({item["id"] for item in observed["evidence"]}, {"orders:0", "orders:1"})
         context = json.loads(seen[3]["messages"][1]["content"])
         self.assertIn("release:current", {item["id"] for item in context["evidence"]})
-        self.assertEqual([item["tool"] for item in report["trace"] if item["step"] == "tool"], ["sales", "releases"])
+        self.assertEqual([item["tool"] for item in report["trace"] if item["step"] == "tool"], ["sales", "releases", "backlog"])
         self.assertEqual(report["termination"], "enough_evidence")
 
     def test_fallback_and_idempotent_review(self):
@@ -135,7 +134,7 @@ class InvestigationTests(unittest.TestCase):
         self.assertEqual([item["text"] for item in snippets], ["Synthetic excerpt"])
 
     def test_rejects_unknown_ids_and_blocks_private_paths(self):
-        item = dict.fromkeys(qwen.FIELDS, "проверить")
+        item = dict.fromkeys(qwen.FIELDS, "Проверить путь покупателя")
         item.update(evidence_ids=["unknown"], contradictions=[])
         with self.assertRaises(ValueError):
             qwen.parse(json.dumps({"hypotheses": [item]}), {})

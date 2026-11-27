@@ -179,7 +179,7 @@ def compile_book(path, config=None, source="Локальная выгрузка"
         book.close()
 
 
-def effect(rows, fix_date, target):
+def effect(rows, fix_date, target, *, allow_missing_values=False):
     """Earliest four fully observed calendar weeks after a fix, aligned across families."""
     finite(target)
     fix = day(fix_date)
@@ -195,10 +195,15 @@ def effect(rows, fix_date, target):
         by_date[d] = row
     if any(d not in by_date or not by_date[d]["complete"] for d in dates):
         return dict(status="Ожидаем данные после исправления")
-    result = {
-        key: mean(finite(by_date[d][key]) for d in dates)
-        for key in ("kaspersky", "astra")
-    }
+    def aggregate(window, key):
+        values = [by_date[d].get(key) for d in window]
+        if allow_missing_values and None in values:
+            return None
+        return mean(finite(value) for value in values)
+
+    result = {key: aggregate(dates, key) for key in ("kaspersky", "astra")}
+    if result["kaspersky"] is None:
+        return dict(status="Ожидаем данные после исправления")
     prior_dates = (
         [first - i * WEEK for i in range(1, 5)]
         if fix == first
@@ -207,7 +212,7 @@ def effect(rows, fix_date, target):
     prior = None
     if all(d in by_date and by_date[d]["complete"] for d in prior_dates):
         prior = {
-            key: mean(finite(by_date[d][key]) for d in prior_dates)
+            key: aggregate(prior_dates, key)
             for key in ("kaspersky", "astra")
         }
     return dict(

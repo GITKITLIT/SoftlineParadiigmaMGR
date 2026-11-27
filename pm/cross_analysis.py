@@ -118,6 +118,8 @@ def strengthen(hypotheses, evidence):
         groups = {item.get("source_group") or item["id"] for item in confirmed
                   if item["quality"] not in {"incomplete", "snippet", "sampled", "stale"}
                   and item.get("freshness") not in {"stale", "future"}
+                  and not (item["kind"] in {"competitor_local", "competitor_web"}
+                           and item.get("freshness") == "unknown")
                   and item["data_mode"] != "demo_counter"}
         hypothesis["statement_type"] = "hypothesis"
         hypothesis["independent_sources"] = len(groups)

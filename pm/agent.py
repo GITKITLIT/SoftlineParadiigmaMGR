@@ -16,12 +16,20 @@ REQUESTED = {
     "backlog": ("бэклог", "задач", "дубликат"),
     "metrika": ("метрик", "визит", "посещаемост"),
     "public_competitors": ("публичн", "интернет"),
+    "effect": ("эффект", "итог доработ", "результат исправлен"),
 }
 
 
 def requested_tools(query):
     question = query.casefold()
     return {tool for tool, stems in REQUESTED.items() if any(stem in question for stem in stems)}
+
+
+def off_topic(query):
+    text = query.strip().casefold()
+    return not requested_tools(text) and text.startswith((
+        "как испечь ", "напиши стих", "расскажи анекдот", "дай рецепт ", "переведи фразу ",
+    ))
 
 
 def valid_action(action, available):

@@ -1,5 +1,5 @@
 <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
-<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav><a href="#analysis">Разбор</a><a href="#agent">ИИ-агент</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#effect">Эффект</a></nav></header>
+<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#settingsPanel">Настройки</a></nav></header>
 <main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p>
 <section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
 <section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
@@ -11,6 +11,7 @@
 <div id="agent">
 <h3>Расследование</h3>
 <label><input type="checkbox" id="includeMeter"> Включить Метрику за период из формы ниже</label>
+<label><input type="checkbox" id="compareMeter"> Сопоставить Метрику по окнам сравнения заказов</label>
 <details id="publicSearch" hidden><summary>Публичные источники конкурентов</summary>
 <label>Продукт<select id="publicProduct"><option value="">-</option></select></label>
 <label>Домены<select id="publicDomains" multiple></select></label>
@@ -18,14 +19,18 @@
 </details>
 <button type="button" class="secondary" id="openInvestigation">Открыть расследование</button>
 <p id="runSummary" role="status"></p>
-<details><summary>Настройки и диагностика</summary>
+<details id="settingsPanel"><summary>Настройки и диагностика</summary>
 <p id="analysisDiagnostics">Подключите локальный сервер.</p>
 <button type="button" class="secondary" id="checkNow">Проверить порог</button>
 <p id="checkStatus" role="status"></p>
 </details>
 <div id="runDetails"></div>
-<details><summary>Журнал и задачи</summary>
+<details id="competitors"><summary>Конкурентные источники</summary><div id="competitorEvidence"><p>Откройте расследование, чтобы проверить источники.</p></div></details>
+<details id="releases"><summary>Релизы в расследовании</summary><div id="releaseEvidence"><p>Откройте расследование, чтобы проверить даты релизов.</p></div></details>
+<details id="journal"><summary>Журнал и задачи</summary>
 <button type="button" class="secondary" id="reloadRuns">Обновить</button>
+<button type="button" class="secondary" id="dailyDigest">Сводка за день</button>
+<p id="digestStatus" role="status"></p>
 <div id="runHistory"></div><div id="serverTasks"></div></details>
 </div><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
 <details><summary>Загрузить материал в локальный поиск</summary><form id="upload"><label>Источник<input name="name" maxlength="120" placeholder="Название интервью или исследования" required></label><label>Категория<select name="kind"><option>Интервью</option><option>Конкуренты</option></select></label><label>Текстовый файл UTF-8<input type="file" id="txt" accept=".txt,text/plain"></label><label>Выбранные абзацы<textarea name="text" required maxlength="30000"></textarea></label><button>Добавить в поиск</button></form></details><div id="t08" class="note"></div></section>

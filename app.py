@@ -5,19 +5,16 @@ import hashlib
 import json
 import os
 import sqlite3
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from pm import ai_store, investigation, monitor
 from pm.analytics import compile_book, effect, finite
-from pm.research import evidence, index_range, search, sources
-from pm.settings import ROOT, private_dir
+from pm.research import evidence, index_range, kind_is_supported, range_excerpts, search, sources
+from pm.documents import snippets
+from pm.settings import ROOT
 from pm.service import metrika, overview, recalculate
-
-LOCK = threading.Lock()
-
 
 def as_json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -66,17 +63,7 @@ def local_doc(body):
     ]
     if any(len(line) > 2000 for line in lines):
         raise ValueError("Разбейте текст на абзацы до 2000 символов")
-    with LOCK:
-        local = private_dir() / "sources.json"
-        original = (
-            json.loads(local.read_text(encoding="utf8")) if local.exists() else []
-        )
-        merged = [x for x in original if not x["id"].startswith(f"u-{key}-")] + adds
-        local.parent.mkdir(parents=True, exist_ok=True)
-        tmp = local.with_suffix(".tmp")
-        tmp.write_text(as_json(merged), encoding="utf8")
-        tmp.replace(local)
-    return {"added": len(adds)}
+    return {"added": ai_store.store_excerpts(f"text:{key}", adds)}
 
 
 def api(route, b):
@@ -101,6 +88,13 @@ def api(route, b):
         }
     if route == "/api/analysis/check":
         return monitor.check(b.get("config", {}))
+    if route == "/api/analysis/reopen":
+        previous = ai_store.run(b["run_id"])
+        if not previous.get("request_context"):
+            raise ValueError("Это расследование создано до сохранения параметров запроса")
+        return investigation.analyze(previous["request_context"], previous=previous)
+    if route == "/api/analysis/daily":
+        return ai_store.daily_digest()
     if route == "/api/analysis/export":
         return ai_store.public_report(b["run_id"])
     if route == "/api/tasks/redmine-export":
@@ -210,6 +204,7 @@ def main():
     imp.add_argument("--kind", required=True)
     imp.add_argument("--sheet")
     imp.add_argument("--range")
+    imp.add_argument("--preview", action="store_true")
     args = p.parse_args()
     if args.cmd == "serve":
         if args.workbook:
@@ -228,20 +223,33 @@ def main():
                     worker.join(timeout=6)
     elif args.cmd == "import":
         extension = args.file.suffix.casefold()
-        if extension == ".txt":
-            if args.file.stat().st_size > 120_000:
-                p.error("Выберите текстовый файл до 120 КБ.")
-            result = local_doc({
-                "name": args.file.name, "text": args.file.read_text(encoding="utf-8-sig"),
-                "kind": args.kind,
-            })
-            print("Добавлено:", result["added"])
-        elif extension in (".xlsx", ".xlsm"):
+        if not kind_is_supported(args.kind):
+            p.error("Поддерживаемые типы: Интервью, Конкуренты, Бэклог.")
+        if extension in (".xlsx", ".xlsm"):
             if not args.sheet or not args.range:
                 p.error("Укажите --sheet и --range для Excel.")
-            print("Добавлено:", index_range(args.file, args.sheet, args.range, args.kind))
+            if args.preview:
+                rows = range_excerpts(args.file, args.sheet, args.range, args.kind)
+                print(as_json({"total": len(rows), "preview": rows[:4]}))
+            else:
+                print("Добавлено:", index_range(args.file, args.sheet, args.range, args.kind))
         else:
-            p.error("Поддерживаются TXT UTF-8 и таблицы XLSX/XLSM.")
+            try:
+                chunks = snippets(args.file)
+            except (ValueError, OSError) as error:
+                p.error(str(error))
+            collection = f"document:{args.file.name}:{args.kind}"
+            rows = []
+            for location, text in chunks:
+                key = hashlib.sha256((collection + as_json(location)).encode()).hexdigest()[:18]
+                marker = " · ".join(f"{field} {value}" for field, value in location.items())
+                rows.append(dict(id="document-" + key, kind=args.kind, text=text,
+                                 ref=f"{args.file.name} · {marker}",
+                                 locator={"file": args.file.name} | location))
+            if args.preview:
+                print(as_json({"total": len(rows), "preview": rows[:4]}))
+            else:
+                print("Добавлено:", ai_store.store_excerpts(collection, rows))
     else:
         dest = Path(args.output).resolve()
         has_private_inputs = args.workbook or any(

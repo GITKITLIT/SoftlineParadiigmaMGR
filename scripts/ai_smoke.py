@@ -21,7 +21,7 @@ for question in ("Сигнал заказов", "Корзина и событи�
                   data=json.dumps({"query": question}).encode(),
                   headers={"Content-Type": "application/json"})
     started = perf_counter()
-    with urlopen(req, timeout=95) as response:
+    with urlopen(req, timeout=160) as response:
         report = json.load(response)
     times.append(perf_counter() - started)
     statuses.append(report["llm_status"])

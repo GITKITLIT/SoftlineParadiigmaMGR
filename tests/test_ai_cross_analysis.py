@@ -100,3 +100,63 @@ class CrossAnalysisTests(unittest.TestCase):
         self.assertNotIn("run_id", second)
         self.assertEqual(incomplete["status"], "missing")
         self.assertEqual(len(ai_store.recent()), 1)
+
+
+    def test_joint_investigation_keeps_cross_checks_and_public_boundary(self):
+        file = self.folder / "corpus.json"
+        file.write_text(json.dumps([
+            {"id": "interview", "kind": "Интервью", "ref": "Синтетический CustDev",
+             "text": "Визиты есть, но корзина скрывает условия заказа"},
+            {"id": "study", "kind": "Конкуренты", "ref": "Синтетическое исследование",
+             "text": "Корзина конкурента показывает условия заказа",
+             "observed_at": "2025-03-15"},
+        ], ensure_ascii=False), encoding="utf8")
+        def meter(start, end, **parameters):
+            return {"status": "ok", "scope": "store_counter", "period": {"start": start, "end": end},
+                    "metrics": {"visits": {"unit": "visits", "metric": "ym:s:visits",
+                                          "value": 100 if start < "2025-03-01" else 130}}}
+        calls = []
+        def provider(**public_fields):
+            calls.append(public_fields)
+            return {"schema_version": 1, "source": "synthetic_fixture", "status": "ok", "reason": None,
+                    "items": [{"id": "web:synthetic", "kind": "competitor_web", "title": "Корзина",
+                               "text": "Синтетическое публичное описание корзины",
+                               "url": "https://example.com/catalog", "domain": "example.com",
+                               "product": "Public Demo", "topic": "checkout", "content_type": "snippet"}]}
+        scopes = {"product": "Public Demo", "domains": ["example.com"], "topics": ["checkout"]}
+        actions = iter(("sales", "metrika", "releases", "research", "competitors", "backlog", "public_competitors", "funnel"))
+        def decide(query, available, evidence, trace, deadline):
+            return {"tool": next(actions), "arguments": {}, "purpose": "compare"}, {}
+        with patch.dict(os.environ, {"PM_EVIDENCE": str(file), "YANDEX_SEARCH_ENABLED": "true",
+                                    "YANDEX_SEARCH_PUBLIC_PRODUCTS": '["Public Demo"]',
+                                    "YANDEX_SEARCH_ALLOWED_DOMAINS": '["example.com"]'}):
+            report = investigation.analyze({
+                "query": "Заказы, визиты, интервью, конкуренты, релиз, бэклог и корзина",
+                "metrika": {"compare": True}, "web": scopes,
+            }, collector=provider, meter=meter, decide=decide)
+        self.assertEqual(calls, [scopes])
+        self.assertEqual({row["kind"] for row in report["evidence"]},
+                         {"orders", "funnel", "release", "interview", "backlog",
+                          "competitor_local", "competitor_web", "metrika"})
+        self.assertEqual(next(x for x in report["evidence"] if x["id"] == "web:synthetic")["data_mode"], "synthetic")
+        self.assertTrue({"sales_metrika", "sales_release", "metrics_and_research", "research_and_competitors",
+                         "competitors_and_backlog"} <= {row.get("relation") for row in report["findings"]})
+
+
+    def test_public_empty_and_timeout_preserve_local_analysis(self):
+        scope = {"product": "Public Demo", "domains": ["example.com"], "topics": ["support"]}
+        with patch.dict(os.environ, {"YANDEX_SEARCH_ENABLED": "true",
+                                    "YANDEX_SEARCH_PUBLIC_PRODUCTS": '["Public Demo"]',
+                                    "YANDEX_SEARCH_ALLOWED_DOMAINS": '["example.com"]'}):
+            request = {"query": "Падение заказов", "web": scope}
+            empty = investigation.analyze(request, collector=lambda **kwargs: {
+                "schema_version": 1, "status": "ok", "items": [],
+            })
+            def unavailable(**kwargs):
+                raise TimeoutError("Synthetic timeout")
+            failed = investigation.analyze(request, collector=unavailable)
+        self.assertEqual(empty["sources_status"]["competitor_web"]["status"], "ok")
+        self.assertEqual(failed["sources_status"]["competitor_web"]["status"], "error")
+        self.assertFalse(any(row["kind"] == "competitor_web" for row in empty["evidence"]))
+        self.assertEqual(empty["effect_plan"]["baseline"], failed["effect_plan"]["baseline"])
+        self.assertTrue(failed["findings"])
