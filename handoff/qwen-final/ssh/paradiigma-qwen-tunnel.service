@@ -1,0 +1,30 @@
+[Unit]
+Description=PARADIIGMA Backend loopback tunnel to Qwen
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=pm-qwen-tunnel
+Group=pm-qwen-tunnel
+LoadCredential=identity:/etc/paradiigma/qwen-tunnel/identity
+ExecStart=/usr/bin/ssh -F /etc/paradiigma/qwen-tunnel/ssh_config -i %d/identity -NT qwen-model
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

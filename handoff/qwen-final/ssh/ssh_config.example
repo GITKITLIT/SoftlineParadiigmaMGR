@@ -1,0 +1,21 @@
+Host qwen-model
+    HostName model-vps.internal.example
+    Port 22
+    User pm-model-forward
+    LocalForward 127.0.0.1:18081 127.0.0.1:18081
+    GatewayPorts no
+    ExitOnForwardFailure yes
+    BatchMode yes
+    IdentitiesOnly yes
+    IdentityAgent none
+    PreferredAuthentications publickey
+    ForwardAgent no
+    ForwardX11 no
+    RequestTTY no
+    StrictHostKeyChecking yes
+    UpdateHostKeys no
+    UserKnownHostsFile /etc/paradiigma/qwen-tunnel/known_hosts
+    GlobalKnownHostsFile /dev/null
+    ConnectTimeout 8
+    ServerAliveInterval 15
+    ServerAliveCountMax 3

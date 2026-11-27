@@ -126,9 +126,9 @@ def start(owner, identifier, body):
                 continue
             if phase == "running" and pair == (owner, identifier):
                 raise ValueError("Дождитесь текущего ответа в этом диалоге.")
-        job = live_runs.start(body, analyze, private=True)["job_id"]
-        JOBS[job] = owner, identifier
-    return {"job_id": job}
+        job = live_runs.start(body, analyze, private=True)
+        JOBS[job["job_id"]] = owner, identifier
+    return job
 
 
 def status(owner, identifier, job):

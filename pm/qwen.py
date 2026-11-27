@@ -3,8 +3,10 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -23,11 +25,58 @@ cause — возможный механизм, а не повтор симпто
 Пример формы: cause «Фильтр мог скрыть нужный товар», verify «Повторить поиск с фильтром и без него»,
 expected «Без фильтра нужный товар появится». Это только пример формы, не сведения о текущем случае."""
 CONCURRENCY = BoundedSemaphore(2)
+INVESTIGATION_ADMISSION = BoundedSemaphore(2)
+INVESTIGATION_SLOT = Lock()
 FIELDS = ("problem", "cause", "verify", "expected", "missing", "risk")
 SYNTHESIS_FIELDS = ("cause", "verify", "expected")
 HYPOTHETICAL_CAUSE = re.compile(r"\b(?:возможн\w*|вероятн\w*|мог(?:ла|ло|ли|ут)?|может|предположительно)\b", re.I)
 ORDERS_EXPLANATION = re.compile(r"(?:почему|причин|гипотез|произош|что измен|снижен|паден|снизил|упал)",
                                 re.I)
+
+
+@dataclass(frozen=True)
+class InvestigationBudget:
+    planning: int
+    planning_step: int
+    synthesis: int
+    synthesis_attempt: int
+    total: int
+
+
+SANDY_BRIDGE_BUDGET = InvestigationBudget(410, 120, 270, 240, 700)
+
+
+def single_slot_enabled():
+    return os.getenv("PM_QWEN_RUNTIME_PROFILE") == "sandy-bridge-one-slot"
+
+
+class InvestigationQueueError(ValueError):
+    """Safe queue status for the requesting client."""
+
+
+def single_slot_investigation(analyze):
+    @wraps(analyze)
+    def run(*args, **kwargs):
+        if not single_slot_enabled():
+            return analyze(*args, **kwargs)
+        if not INVESTIGATION_ADMISSION.acquire(blocking=False):
+            raise InvestigationQueueError("Очередь расследований заполнена. Повторите после завершения одного из них.")
+        try:
+            budget = SANDY_BRIDGE_BUDGET
+            if not INVESTIGATION_SLOT.acquire(blocking=False):
+                progress = kwargs.get("progress")
+                if progress:
+                    progress({"step": "queue", "status": "waiting"})
+                if not INVESTIGATION_SLOT.acquire(timeout=budget.total):
+                    raise InvestigationQueueError("Время ожидания запуска расследования истекло. Повторите запрос.")
+            try:
+                return analyze(*args, **kwargs, _budget=budget)
+            finally:
+                INVESTIGATION_SLOT.release()
+        finally:
+            INVESTIGATION_ADMISSION.release()
+
+    return run
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -120,16 +169,16 @@ def parse(content, evidence, *, primary=None):
     return hypotheses
 
 
-def infer(query, evidence, *, opener=None, planning=True, facts=()):
+def infer(query, evidence, *, opener=None, planning=True, facts=(), budget=None, deadline=None):
     if not CONCURRENCY.acquire(blocking=False):
         return "unavailable", [], {}, "busy"
     try:
-        return _infer(query, evidence, opener, planning, facts)
+        return _infer(query, evidence, opener, planning, facts, budget, deadline)
     finally:
         CONCURRENCY.release()
 
 
-def _infer(query, evidence, opener, planning, facts):
+def _infer(query, evidence, opener, planning, facts, budget, deadline):
     try:
         url = endpoint()
         if not url:
@@ -168,7 +217,10 @@ def _infer(query, evidence, opener, planning, facts):
         payload = qualitative_input(query, batch, checked_facts)
     data = json.dumps(payload, ensure_ascii=False)
     # Keep a bounded repair window for CPU-only inference as well as accelerated hosts.
-    deadline = time.monotonic() + 180
+    synthesis_end = time.monotonic() + (budget.synthesis if budget else 180)
+    if deadline is not None:
+        synthesis_end = min(synthesis_end, deadline)
+    per_attempt = budget.synthesis_attempt if budget else 110
     causal_query = ORDERS_EXPLANATION.search(query) and re.search(r"заказ|продаж|индекс", query, re.I)
     primary_delta = by_id.get("orders:0", {}).get("values", {}).get("delta")
     primary = "orders:0" if causal_query and primary_delta is not None and primary_delta < 0 else None
@@ -179,6 +231,9 @@ def _infer(query, evidence, opener, planning, facts):
             "Покажи, какое отдельное наблюдение может её опровергнуть."
         )
     for attempt in range(2):
+        remaining = synthesis_end - time.monotonic()
+        if remaining <= 0:
+            return "unavailable", [], usage, "synthesis_budget_exhausted"
         messages = [{"role": "system", "content": prompt},
                     {"role": "user", "content": data}]
         if attempt:
@@ -195,7 +250,7 @@ def _infer(query, evidence, opener, planning, facts):
             "max_tokens": 560, "stream": False, "response_format": response_format,
         }).encode(), headers={"Content-Type": "application/json"})
         try:
-            with opener(request, timeout=min(110, max(1, deadline - time.monotonic()))) as response:
+            with opener(request, timeout=min(per_attempt, remaining)) as response:
                 raw = json.loads(response.read(100_000))
             for key, count in token_usage(raw).items():
                 usage[key] = usage.get(key, 0) + count
@@ -204,7 +259,7 @@ def _infer(query, evidence, opener, planning, facts):
         except OSError:
             return "unavailable", [], usage, "transport_error"
         except (ValueError, TypeError, KeyError, IndexError, AttributeError):
-            if attempt or time.monotonic() >= deadline:
+            if attempt or time.monotonic() >= synthesis_end:
                 return "invalid_response", [], usage, "schema_validation"
     raise AssertionError("Unreachable repair loop")
 
@@ -246,7 +301,7 @@ def select_step(url, model, query, evidence, opener):
         return None, {}
 
 
-def planner():
+def planner(step_seconds=26):
     try:
         url = endpoint()
     except (OSError, ValueError):
@@ -292,13 +347,23 @@ def planner():
                     "публичным каталогом. Локальный архив не заменяет публичную проверку."
                 )
             payload = {"question": query, "available_tools": available, "evidence": batch, "completed": recent_tools}
+            if os.getenv("PM_QWEN_STABLE_PLANNER_PREFIX", "").lower() == "true":
+                # Select the same evidence under the same budget. Transmit selected
+                # rows in acquisition order, before fields that change at each step.
+                evidence_order = {item["id"]: index for index, item in enumerate(evidence)}
+                batch.sort(key=lambda item: evidence_order[item["id"]])
+                payload = {"question": query, "evidence": batch, "available_tools": available,
+                           "completed": recent_tools}
             request = Request(url, data=json.dumps({
                 "model": model, "temperature": 0, "max_tokens": 120, "stream": False,
                 "response_format": {"type": "json_schema", "json_schema": {"name": "investigation_action", "schema": schema}},
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             }).encode(), headers={"Content-Type": "application/json"})
-            with opener(request, timeout=min(26, max(1, deadline - time.monotonic()))) as reply:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, usage
+            with opener(request, timeout=min(step_seconds, remaining)) as reply:
                 raw = json.loads(reply.read(20_000))
             usage = token_usage(raw)
             result = json.loads(strip_wrapper(raw["choices"][0]["message"]["content"]))

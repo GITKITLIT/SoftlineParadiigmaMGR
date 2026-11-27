@@ -45,9 +45,9 @@ def valid_action(action, available):
     return purpose in FINISH_PURPOSES if tool == "finish" else tool in available and purpose in TOOL_PURPOSES
 
 
-def investigate(context, decide=None, *, clock=time.monotonic, progress=None):
+def investigate(context, decide=None, *, clock=time.monotonic, progress=None, deadline=None):
     trace, usage = [], {}
-    end = clock() + PLAN_SECONDS
+    end = clock() + PLAN_SECONDS if deadline is None else deadline
     termination = "offline_collection" if decide is None else "step_limit"
 
     def execute(name, arguments, purpose, actor):

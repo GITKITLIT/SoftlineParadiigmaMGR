@@ -447,21 +447,22 @@ let pendingMemoryScope = null;
 
 async function runWithProgress(input) {
   const job = await api("analysis/start", input);
-  const deadline = Date.now() + 270000;
-  const names = {sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
+  const deadline = Date.now() + (job.wait_seconds ?? 270) * 1000;
+  const names = {queue: "В очереди к модели", synthesis: "Синтез гипотез",
+    sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
     research: "Исследования", competitors: "Конкуренты", metrika: "Метрика",
     public_competitors: "Публичные источники", effect: "Эффект", compare_history: "Сравнение периодов",
     search_history: "Поиск в памяти", competitor_history: "История конкурентов"};
-  const statuses = {running: "выполняется", ok: "готово", missing: "нет данных", error: "ошибка",
+  const statuses = {waiting: "ожидание", running: "выполняется", ok: "готово", missing: "нет данных", error: "ошибка",
     unavailable: "недоступно", partial: "частично", disabled: "выключено"};
   while (Date.now() < deadline) {
     const result = await api("analysis/status", {job_id: job.job_id});
-    const events = result.phases.filter((event) => event.step === "tool" || event.step === "synthesis");
+    const events = result.phases.filter((event) => ["queue", "tool", "synthesis"].includes(event.step));
     $("#runPhases").replaceChildren(...events.map((event) =>
-      node("li", (event.step === "synthesis" ? "Синтез гипотез" : names[event.tool] || event.tool) +
+      node("li", (names[event.tool] || names[event.step] || event.tool) +
       " · " + (statuses[event.status] || event.status))));
     if (result.status === "ready") return api("analysis/report", {run_id: result.run_id});
-    if (result.status === "failed") throw Error("Расследование завершилось с ошибкой. Проверьте настройки и источники.");
+    if (result.status === "failed") throw Error(result.message || "Расследование завершилось с ошибкой. Проверьте настройки и источники.");
     await new Promise((resolve) => setTimeout(resolve, 650));
   }
   throw Error("Время ожидания истекло. Проверьте журнал для завершённого отчёта.");
