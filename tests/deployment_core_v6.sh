@@ -6,7 +6,7 @@ set -euo pipefail
 source_tree=$(cd "$(dirname "$0")/.." && pwd -P)
 sandbox=$(mktemp -d)
 trap 'rm -rf -- "$sandbox"' EXIT
-core=b71424d71468ccbdd9a2ceb7c44799fc07abe334
+core=b71424d71468ccbdd9a2ceb7b44799fc07abe334
 search=93de5460148982747093bfe50e34dbc57abbb88c
 old=$(readlink -e /opt/paradiigma/current)
 db=/var/lib/paradiigma/db/ai.sqlite3

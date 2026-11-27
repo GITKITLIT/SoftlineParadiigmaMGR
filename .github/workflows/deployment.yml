@@ -68,7 +68,7 @@ jobs:
         run: |
           git ls-remote --heads origin 'refs/heads/feature/ai-core' 'refs/heads/feature/yandex-search'
           git fetch --no-tags origin refs/heads/feature/ai-core refs/heads/feature/yandex-search
-          git cat-file -e b71424d71468ccbdd9a2ceb7c44799fc07abe334^{tree}
+          git cat-file -e b71424d71468ccbdd9a2ceb7b44799fc07abe334^{tree}
           git cat-file -e 93de5460148982747093bfe50e34dbc57abbb88c^{tree}
       - name: Rehearse Core v6, SMTP and restore on disposable state
         run: sudo bash tests/deployment_core_v6.sh --disposable-vm
