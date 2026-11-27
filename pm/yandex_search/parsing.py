@@ -7,6 +7,7 @@ import json
 import re
 import unicodedata
 from datetime import UTC, date, datetime
+from urllib.parse import unquote
 from xml.etree import ElementTree
 
 from pm.search_security import source_url
@@ -14,6 +15,7 @@ from pm.search_security import source_url
 from .client import MAX_HTTP_BYTES, SearchFailure
 
 MAX_XML_BYTES = 1024 * 1024
+_HTML_MARKUP = re.compile(r"<(?:[!?]|/?[A-Za-z][\w:-]*[\s/>])")
 
 
 def utc_stamp(value):
@@ -39,9 +41,28 @@ def plain_text(value, limit):
     )[:limit].strip()
 
 
+def _highlight_text(node):
+    # Yandex inserts hlword elements within document titles and passages.
+    # Other elements can carry active or hidden text and are ignored.
+    parts = []
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            parts.append(current)
+            continue
+        parts.append(current.text or "")
+        for child in reversed(current):
+            if child.tail:
+                pending.append(child.tail)
+            if child.tag == "hlword":
+                pending.append(child)
+    return "".join(parts)
+
+
 def _field(node, path, limit):
     match = node.find(path)
-    return plain_text("".join(match.itertext()), limit) if match is not None else ""
+    return plain_text(_highlight_text(match), limit) if match is not None else ""
 
 
 def _date_fields(doc):
@@ -50,7 +71,7 @@ def _date_fields(doc):
     for tag, key in (("published_at", "published"), ("modtime", "modified")):
         value = _field(doc, tag, 80)
         try:
-            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}", value):
                 result[key + "_date"] = date.fromisoformat(value).isoformat()
             elif value:
                 timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -102,17 +123,25 @@ def parse_response(payload, *, domain, topic, query, product, retrieved_at, limi
             return [], []
         if "32" in codes:
             raise SearchFailure("provider_daily_limit", "unavailable")
+        if "31" in codes:
+            raise SearchFailure("provider_not_configured", "unavailable")
         raise SearchFailure("provider_xml_error")
 
     results = {}
     filtered = False
-    for doc in response.iterfind("results/grouping/group/doc"):
-        url = source_url(_field(doc, "url", 2049), domain)
+    docs = response.findall("results/grouping/group/doc")
+    docs.extend(response.findall("results/doc"))
+    for doc in docs:
+        url = source_url(doc.findtext("url", ""), domain)
         title = _field(doc, "title", 240)
         text = plain_text(" ".join(
-            "".join(node.itertext()) for node in doc.findall("passages/passage")
+            _highlight_text(node) for node in doc.findall("passages/passage")
         ), 1400)
-        if not url or not text or any(secret in value for value in (url, title, text)):
+        if (
+            not url or not text
+            or any(_HTML_MARKUP.search(value) for value in (title, text))
+            or any(secret in value for value in (unquote(url), title, text))
+        ):
             filtered = True
             continue
         key = "web:" + hashlib.sha256((url + "\0" + text).encode("utf-8")).hexdigest()[:32]

@@ -38,7 +38,7 @@ def retry_delay(failure, retry_index):
     # Preserve a longer provider cooldown by skipping the retry.
     if failure.retry_after is not None and failure.retry_after >= _MAX_BACKOFF:
         return None
-    fallback = 0.25 * (2 ** retry_index)
+    fallback = (1.0 if failure.reason == "rate_limited" else 0.25) * (2 ** retry_index)
     base = max(failure.retry_after or 0, fallback)
     return min(_MAX_BACKOFF, base + random.uniform(0, 0.2))
 
@@ -80,6 +80,10 @@ def request_once(query, config):
             conn.request("POST", _PATH, body=body, headers=headers)
             with conn.getresponse() as response:
                 _validate_status(response)
+                length = response.getheader("Content-Length")
+                if length and length.isascii() and length.isdigit():
+                    if len(length) > 10 or int(length) > MAX_HTTP_BYTES:
+                        raise SearchFailure("response_too_large")
                 payload = response.read(MAX_HTTP_BYTES + 1)
         finally:
             conn.close()

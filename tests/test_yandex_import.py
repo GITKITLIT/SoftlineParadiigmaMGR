@@ -119,6 +119,16 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(retry.returncode, 2)
         self.assertEqual(len(json.loads(outfile.read_text(encoding="utf-8"))), 3)
 
+    def test_snapshot_is_a_separate_dated_capture(self):
+        path = self.directory / "snapshot.json"
+        command = [sys.executable, str(ROOT / "scripts/search_smoke.py"), "--snapshot", str(path)]
+        completed = subprocess.run(command, capture_output=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved, json.loads(completed.stdout))
+        self.assertEqual(saved["mode"], "offline")
+        self.assertTrue(saved["items"][0]["retrieved_at"].endswith("Z"))
+
     def test_offline_smoke_works_with_blank_environment(self):
         with patch.dict(os.environ, {"YANDEX_SEARCH_ENABLED": "false"}):
             result = offline_search()

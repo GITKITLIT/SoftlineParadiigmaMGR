@@ -3,11 +3,14 @@ import io
 import json
 import os
 import ssl
+import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 from pm.search_security import domain_name, source_url
@@ -16,7 +19,7 @@ from pm.yandex_search.client import (
     MAX_HTTP_BYTES, SearchFailure, request_once, retry_delay,
 )
 from pm.yandex_search.config import Config
-from pm.yandex_search.parsing import MAX_XML_BYTES, parse_response
+from pm.yandex_search.parsing import MAX_XML_BYTES
 from pm.yandex_search.storage import Store
 
 
@@ -174,6 +177,15 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["warnings"], ["result_filtered"])
         self.assertNotIn(KEY, json.dumps(result))
 
+    def test_encoded_markup_and_percent_encoded_secret_are_filtered(self):
+        escaped = DOC.replace("месяцев", "&lt;script&gt;invalid&lt;/script&gt;")
+        encoded_secret = DOC.replace("/product", "/product?token=%73" + KEY[1:])
+        self.request.return_value = reply(escaped + encoded_secret)
+        result = self.call()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["warnings"], ["result_filtered"])
+
     def test_malformed_responses(self):
         self.env["YANDEX_SEARCH_CACHE_TTL"] = "0"
         self.env["YANDEX_SEARCH_DAILY_LIMIT"] = "50"
@@ -232,6 +244,29 @@ class SearchTests(unittest.TestCase):
             granted = list(pool.map(lambda _: Store().reserve(now, 7), range(28)))
         self.assertEqual(sum(granted), 7)
         self.assertTrue(store.reserve(now + timedelta(minutes=1), 7))
+
+    def test_concurrent_runs_share_one_provider_attempt(self):
+        ready = Barrier(6)
+
+        def fetch(_):
+            ready.wait(timeout=5)
+            return self.call()
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(fetch, range(6)))
+        self.assertTrue(all(result["status"] == "ok" for result in results))
+        self.assertEqual(sum(result["usage"]["requests"] for result in results), 1)
+        self.assertEqual(sum(result["usage"]["cache_hits"] for result in results), 5)
+        self.request.assert_called_once()
+
+    def test_corrupted_cached_shape_is_a_safe_error(self):
+        self.assertEqual(self.call()["status"], "ok")
+        with closing(sqlite3.connect(self.directory / "yandex-search.sqlite3")) as db, db:
+            db.execute("UPDATE cache SET payload = ?", ('[[{"id":"bad"}], []]',))
+        result = self.call()
+        self.assertEqual((result["status"], result["reason"]), ("unavailable", "storage_unavailable"))
+        self.assertEqual(result["usage"]["requests"], 0)
+        self.request.assert_called_once()
 
     def test_unusable_storage_fails_closed(self):
         (self.directory / "yandex-search.sqlite3").mkdir()

@@ -13,8 +13,7 @@ sys.path.insert(0, str(ROOT))
 from pm.competitor_sources import load_competitor_evidence
 
 
-def write_private_json(path, value):
-    """Publish a new JSON file outside Git, with a same-directory atomic link."""
+def private_json_target(path):
     target = path.resolve()
     if target.suffix.lower() != ".json" or any(
         parent == ROOT or (parent / ".git").exists() for parent in target.parents
@@ -22,6 +21,14 @@ def write_private_json(path, value):
         raise ValueError("output_must_be_json_outside_git")
     if path.is_symlink() or target.exists():
         raise ValueError("output_already_exists")
+    if not target.parent.is_dir():
+        raise ValueError("output_directory_missing")
+    return target
+
+
+def write_private_json(path, value):
+    """Publish a new JSON file outside Git, with a same-directory atomic link."""
+    target = private_json_target(path)
     temporary = None
     try:
         with NamedTemporaryFile(

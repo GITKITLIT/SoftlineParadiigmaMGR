@@ -99,16 +99,16 @@ def _display(value):
     return plain_text(str(value), 500)
 
 
-def _add_metadata(metadata, label, value):
-    field = _FIELDS.get(label.casefold())
-    if field == "study_date":
-        parsed = _study_date(value)
-        if parsed:
-            metadata[field] = parsed
-    elif field:
-        text = _display(value)
-        if text:
-            metadata[field] = text
+def _read_metadata(pairs):
+    fields = {}
+    conflicts = set()
+    for label, raw in pairs:
+        key = _FIELDS.get(label.casefold())
+        if key:
+            value = _study_date(raw) if key == "study_date" else _display(raw)
+            if value and fields.setdefault(key, value) != value:
+                conflicts.add(key)
+    return {key: value for key, value in fields.items() if key not in conflicts}
 
 
 def _xlsx_records(path, data, limit):
@@ -136,9 +136,7 @@ def _xlsx_records(path, data, limit):
                 if len(recognized) >= 2 or len(recognized) == len(cells):
                     headers = recognized
                     continue
-                metadata = {}
-                for col, value, _ in cells:
-                    _add_metadata(metadata, headers.get(col, ""), value)
+                metadata = _read_metadata((headers.get(col, ""), value) for col, value, _ in cells)
                 first = get_column_letter(cells[0][0])
                 last = get_column_letter(cells[-1][0])
                 area = f"{first}{index}" if first == last else f"{first}{index}:{last}{index}"
@@ -178,17 +176,14 @@ def _pptx_records(path, archive, limit):
     for position, entry in enumerate(_pptx_order(archive), 1):
         slide = safe_xml(archive.read(entry), _MAX_MEMBER)
         paragraphs = [
-            plain_text("".join(node.itertext()), 500)
+            plain_text("".join(run.text or "" for run in node.iterfind(".//{*}t")), 500)
             for node in slide.iterfind(".//{*}p")
         ]
         text = "\n".join(line for line in paragraphs if line)
         if not text:
             continue
-        metadata = {}
-        for paragraph in paragraphs:
-            name, separator, value = paragraph.partition(":")
-            if separator:
-                _add_metadata(metadata, name.strip(), value.strip())
+        labeled = [paragraph.split(":", 1) for paragraph in paragraphs if ":" in paragraph]
+        metadata = _read_metadata((label.strip(), value.strip()) for label, value in labeled)
         records.append(_record(path, f"слайд {position}", text, metadata, slide=position))
         if len(records) >= limit:
             break
@@ -213,5 +208,6 @@ def load_competitor_evidence(
                 _pptx_records(path, archive, limit)
             )
         return [item | {"imported_at": utc_stamp(datetime.now(UTC))} for item in entries]
-    except (BadZipFile, ElementTree.ParseError, KeyError, TypeError, RuntimeError, UnicodeError) as exc:
+    except (BadZipFile, ElementTree.ParseError, KeyError, IndexError, TypeError, RuntimeError,
+            UnicodeError, OverflowError) as exc:
         raise ValueError("invalid_research_document") from exc

@@ -2,6 +2,7 @@
 
 import sqlite3
 import time
+from contextlib import nullcontext
 
 from .search_security import public_queries
 from .yandex_search.client import SearchFailure, request_once, retry_delay
@@ -13,7 +14,8 @@ _STORAGE_ERRORS = (OSError, sqlite3.Error, ValueError, RecursionError)
 _MAX_ATTEMPTS = 3
 _STOP_LIVE = {
     "authorization_failed", "tls_failed", "redirect_rejected",
-    "provider_daily_limit", "daily_limit", "rate_limited", "storage_unavailable",
+    "provider_daily_limit", "provider_not_configured", "daily_limit", "rate_limited",
+    "storage_unavailable",
 }
 
 
@@ -54,6 +56,31 @@ def _search(store, config, usage, *, domain, topic, query, product, smoke):
             time.sleep(delay)
 
 
+def _resolve_query(store, config, result, product, query_info, stop_live, smoke):
+    domain, topic, query = query_info
+    use_cache = not smoke and config.ttl > 0
+    key = cache_key(config.folder, query, config.max_results)
+    with store.key_lock(key) if use_cache else nullcontext():
+        if use_cache:
+            result["metrics"]["cache_lookups"] += 1
+            cached = store.get(key, now_utc(), config.ttl)
+            if cached is not None:
+                result["usage"]["cache_hits"] += 1
+                return cached
+        if stop_live is not None:
+            raise stop_live
+        items, notes, fetched = _search(
+            store, config, result["usage"], domain=domain, topic=topic, query=query,
+            product=product, smoke=smoke,
+        )
+        if use_cache:
+            try:
+                store.put(key, items, notes, fetched, config.ttl)
+            except _STORAGE_ERRORS:
+                result["warnings"].append("cache_write_failed")
+        return items, notes
+
+
 def _run(result, *, product, domains, topics, smoke):
     try:
         if not enabled("YANDEX_SEARCH_ENABLED"):
@@ -81,32 +108,13 @@ def _run(result, *, product, domains, topics, smoke):
 
     failures = []
     warnings = {}
-    usage = result["usage"]
     found = {}
     successes = 0
     stop_live = None
-    for domain, topic, query in queries[:config.max_queries]:
-        key = cache_key(config.folder, query, config.max_results)
+    for query_info in queries[:config.max_queries]:
+        _, topic, query = query_info
         try:
-            cached = None
-            if not smoke and config.ttl:
-                result["metrics"]["cache_lookups"] += 1
-                cached = store.get(key, now_utc(), config.ttl)
-            if cached is not None:
-                usage["cache_hits"] += 1
-                items, notes = cached
-            else:
-                if stop_live is not None:
-                    raise stop_live
-                items, notes, fetched = _search(
-                    store, config, usage, domain=domain, topic=topic, query=query,
-                    product=product, smoke=smoke,
-                )
-                try:
-                    if not smoke:
-                        store.put(key, items, notes, fetched, config.ttl)
-                except _STORAGE_ERRORS:
-                    warnings["cache_write_failed"] = None
+            items, notes = _resolve_query(store, config, result, product, query_info, stop_live, smoke)
         except SearchFailure as failure:
             failures.append(failure)
             if failure.reason in _STOP_LIVE:
@@ -129,6 +137,7 @@ def _run(result, *, product, domains, topics, smoke):
         first = failures[0]
         result.update(status="partial" if successes else first.status, reason=first.reason)
         warnings.update(dict.fromkeys(failure.reason for failure in failures))
+    warnings.update(dict.fromkeys(result["warnings"]))
     result.update(items=list(found.values()), warnings=list(warnings))
     return result
 

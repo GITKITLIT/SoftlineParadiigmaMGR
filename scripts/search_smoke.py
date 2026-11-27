@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -14,12 +15,13 @@ sys.path.insert(0, str(ROOT))
 
 from pm.search_security import TOPIC_TERMS
 from pm.web_search import _collect, collect_competitor_evidence
-from scripts.search_import_competitors import write_private_json
+from scripts.search_import_competitors import private_json_target, write_private_json
 
 OFFLINE_INPUT = {"product": "Демо Pro", "domains": ["example.com"], "topics": ["licensing"]}
 
 
-def offline_search():
+@contextmanager
+def offline_fixture():
     raw = (ROOT / "tests/fixtures/yandex/offline.xml").read_bytes()
     payload = json.dumps({"rawData": base64.b64encode(raw).decode("ascii")}).encode("utf-8")
     with TemporaryDirectory() as private:
@@ -34,7 +36,12 @@ def offline_search():
         with patch.dict(os.environ, env, clear=True), patch(
             "pm.web_search.request_once", return_value=payload
         ):
-            return collect_competitor_evidence(**OFFLINE_INPUT)
+            yield
+
+
+def offline_search():
+    with offline_fixture():
+        return collect_competitor_evidence(**OFFLINE_INPUT)
 
 
 def main():
@@ -45,6 +52,11 @@ def main():
     parser.add_argument("--topic", choices=TOPIC_TERMS)
     parser.add_argument("--snapshot", type=Path, help="Новый JSON вне репозиториев")
     args = parser.parse_args()
+    if args.snapshot:
+        try:
+            args.snapshot = private_json_target(args.snapshot)
+        except (ValueError, OSError):
+            parser.error("Укажите путь к новому JSON в существующей папке вне репозиториев.")
     if args.live:
         if not all((args.product, args.domain, args.topic)):
             parser.error("--live требует --product, --domain и --topic")

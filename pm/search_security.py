@@ -77,7 +77,7 @@ def public_queries(product, domains, topics, allowed_products, allowed_domains):
 
 def source_url(value: str, expected_domain: str) -> str | None:
     if not value or len(value) > 2048 or any(
-        char == "\\" or char.isspace() or unicodedata.category(char).startswith("C")
+        char in '\\<>"{}|^`' or char.isspace() or unicodedata.category(char).startswith("C")
         for char in value
     ):
         return None

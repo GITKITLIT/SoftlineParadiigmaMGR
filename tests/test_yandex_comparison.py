@@ -81,6 +81,12 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(web["offer"]["product"])
         self.assertIn("product", web["price_comparison"]["missing"]["competitor"])
 
+    def test_conflicting_labels_cannot_supply_a_price(self):
+        context = self.context(web=WEB | {"text": WEB["text"] + "; Цена: 999"})
+        observation = context["observations"][1]
+        self.assertIsNone(observation["offer"]["price"])
+        self.assertIn("price", observation["price_comparison"]["missing"]["competitor"])
+
     def test_offline_combined_investigation(self):
         result = run()
         self.assertEqual(result["mode"], "offline")

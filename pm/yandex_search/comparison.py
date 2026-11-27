@@ -4,7 +4,7 @@ import re
 from datetime import date
 from decimal import Decimal
 
-from pm.competitor_sources import _add_metadata
+from pm.competitor_sources import _read_metadata
 
 _UNKNOWN = {"-", "—", "н/д", "n/a", "неизвестно", "unknown"}
 _TERMS = ("product", "version", "license_type", "duration", "devices", "tax", "currency")
@@ -43,13 +43,10 @@ def _offer(row):
 def _metadata(item):
     if item["kind"] != "competitor_web":
         return item
-    fields = {}
     # Recognize explicit labels in a single snippet. Keep other language as evidence text.
-    for fragment in re.split(r"[;|\n]", item["text"]):
-        label, separator, value = fragment.partition(":")
-        if separator:
-            _add_metadata(fields, label.strip(), value.strip())
-    return fields
+    fragments = re.split(r"[;|\n]", item["text"])
+    labeled = [fragment.split(":", 1) for fragment in fragments if ":" in fragment]
+    return _read_metadata((label.strip(), value.strip()) for label, value in labeled)
 
 
 def _source(item, scope):
