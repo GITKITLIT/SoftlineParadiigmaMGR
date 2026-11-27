@@ -2,6 +2,8 @@
 
 import re
 
+from .offer_evidence import offer_comparison
+
 NUMERAL = re.compile(r"[+−-]?[\w-]*\d[\w-]*(?:[.,:%]\d+)*%?")
 DIRECTIONS = {
     "delta": "изменение",
@@ -51,4 +53,11 @@ def qualitative_input(question, evidence, facts):
         if values:
             row["cues"] = values
         observations.append(row)
+    comparison = offer_comparison(evidence)
+    if comparison:
+        observations.append({
+            "relation": "price_comparability", "statement_type": "fact",
+            "evidence_ids": comparison["evidence_ids"], "status": comparison["status"],
+            "observation": comparison["text"], "missing": comparison["missing"],
+        })
     return {"question": text(question), "evidence": rows, "server_observations": observations}

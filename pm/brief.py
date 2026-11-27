@@ -1,5 +1,7 @@
 """Compact release and chat views of a single validated AI Core report."""
 
+from llm_lab.offer_evidence import offer_comparison
+
 from . import ai_store
 
 
@@ -36,8 +38,16 @@ def report_view(report, *, focus=None):
         "research", "interview", "competitor_local", "competitor_web", "backlog", "release",
         "historical_document", "historical_competitor", "memory_context",
     } and (not focus or item["kind"] in focus)]
+    offer_check = offer_comparison(evidence)
+    market_focus = focus and "competitor_web" in focus
     if report["termination"] == "out_of_scope":
         conclusion = report["summary"]
+    elif market_focus and offer_check:
+        conclusion = offer_check["text"]
+    elif market_focus and report["sources_status"]["competitor_web"]["status"] == "not_checked":
+        conclusion = "Публичные источники ещё не проверены в этом расследовании."
+    elif market_focus and report["sources_status"]["competitor_web"]["status"] in {"unavailable", "error"}:
+        conclusion = "Публичные источники недоступны в этом расследовании."
     elif measurements:
         conclusion = measurements[0]["text"]
     elif observations:
@@ -52,6 +62,9 @@ def report_view(report, *, focus=None):
         conclusion += " Конверсия в корзину недоступна для части выбранного среза."
     if not focus and hypotheses and report["llm_status"] == "ok" and not measurement_gap:
         conclusion = f"{conclusion} Гипотеза: {hypotheses[0]['cause']}"
+    next_step = report["recommended_actions"][0] if hypotheses or measurement_gap else None
+    if market_focus and offer_check and offer_check["missing"]:
+        next_step = offer_check["missing"][0]
     return {
         "run_id": report["run_id"],
         "answer": conclusion,
@@ -62,9 +75,10 @@ def report_view(report, *, focus=None):
         "observations": observations,
         "sources": evidence,
         "sources_status": report["sources_status"],
+        "offer_comparison": offer_check,
         "findings": report["findings"],
         "hypotheses": hypotheses,
-        "next_step": report["recommended_actions"][0] if hypotheses or measurement_gap else None,
+        "next_step": next_step,
         "effect_plan": report["effect_plan"],
         "limitations": report["limitations"],
         "trace": [event for event in report["trace"] if event["step"] not in HIDDEN_PHASES],

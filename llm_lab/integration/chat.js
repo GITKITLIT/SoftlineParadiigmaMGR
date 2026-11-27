@@ -214,6 +214,11 @@
     if (view.previous_evidence?.length) {
       block.append(details("Источники из предыдущего ответа", view.previous_evidence.map(source)));
     }
+    if (view.offer_comparison) {
+      const check = view.offer_comparison;
+      block.append(details("Сопоставимость предложений", [element("p", check.text),
+        ...check.missing.map((line) => element("p", line)), cite(view, check.evidence_ids)]));
+    }
     if (view.measurements.length || view.observations.length) {
       block.append(details("Наблюдения", [
         ...view.measurements.map((item) => {

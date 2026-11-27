@@ -5,6 +5,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
+from llm_lab.offer_evidence import offer_comparison
 from llm_lab.synthesis import qualitative_input
 from pm import agent, chat, qwen
 from pm.analysis_context import TOOLS, entry
@@ -21,6 +22,20 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(report["evidence"][0]["cues"], {"изменение": "снижение"})
         self.assertNotRegex(report["evidence"][0]["text"], r"\d")
         self.assertEqual(evidence[0]["values"]["before"], 100)
+
+    def test_only_fresh_verified_offers_with_equal_terms_are_comparable(self):
+        offer = {"currency": "RUB", "terms": "pro | год | пять устройств", "value": 100}
+        first = {"id": "web:first", "kind": "competitor_web", "competitor": "one.example",
+                 "quality": "page_excerpt", "freshness": "recent", "offer": offer}
+        second = first | {"id": "web:second", "competitor": "two.example"}
+        self.assertEqual(offer_comparison([first, second])["status"], "comparable")
+        different = second | {"offer": offer | {"currency": "USD"}}
+        self.assertEqual(offer_comparison([first, different])["status"], "different_terms")
+        stale = second | {"freshness": "stale"}
+        snippet = second | {"quality": "snippet"}
+        self.assertEqual(offer_comparison([first, stale, snippet])["status"], "insufficient")
+        model = qualitative_input("Сравни предложения", [first, different], [])
+        self.assertEqual(model["server_observations"][0]["status"], "different_terms")
 
     def test_unknown_action_and_extra_arguments_never_reach_tool(self):
         backend = Mock()

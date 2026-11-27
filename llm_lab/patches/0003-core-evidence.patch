@@ -128,7 +128,29 @@
                  evidence_ids=[item["id"]], contradictions=[],
                  missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
                  confidence="low" if item["quality"] == "incomplete" else "medium",
-@@ -162,10 +171,16 @@
+@@ -70,6 +79,12 @@
+     skip_synthesis = measurement_question and (delta is None or delta >= 0) and not any(
+         keyword in query.casefold() for keyword in ("почему", "гипотез", "конкурент", "интервью")
+     )
++    market_question = query.casefold()
++    compare_offers = (
++        any(item["kind"] == "competitor_web" for item in evidence)
++        and any(word in market_question for word in ("сопоставим", "сравни цен", "сравни условия"))
++        and not any(word in market_question for word in ("почему", "гипотез", "что проверить"))
++    )
+     if termination == "out_of_scope":
+         evidence, findings, matches, limits = [], [], [], []
+         core, control = None, None
+@@ -77,6 +92,8 @@
+         status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
+     elif skip_synthesis:
+         status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
++    elif compare_offers:
++        status, hypotheses, usage, reason = "not_needed", [], {}, "competitor_measurement"
+     elif comparison and not any(word in query.casefold() for word in ("почему", "гипотез", "как проверить")):
+         status, hypotheses, usage, reason = "not_needed", [], {}, "historical_measurement"
+     elif infer is not None:
+@@ -162,10 +179,16 @@
          hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
      )]
      elapsed = time.perf_counter() - started

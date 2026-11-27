@@ -24,6 +24,7 @@ MEASUREMENT_FOCUS = {
     "product_history": {"release", "historical_metric", "historical_comparison"},
     "search_history": {"historical_document", "memory_context"},
     "competitors": {"competitor_local", "competitor_web", "historical_competitor"},
+    "public_competitors": {"competitor_web"},
     "backlog": {"backlog"},
     "effect": {"effect"},
     "research": {"research", "interview"},
