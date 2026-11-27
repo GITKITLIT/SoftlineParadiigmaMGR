@@ -27,6 +27,14 @@ class ChatTests(unittest.TestCase):
         self.assertNotIn("Предыдущий вопрос", analyzer.call_args.args[0]["query"])
         self.assertFalse(ai_store.recent())
 
+    def test_follow_up_distinguishes_prior_citations_from_fresh_evidence(self):
+        previous = chat.consult({"question": "Почему упали заказы?"})
+        fresh = chat.consult({"question": "Какие доказательства подтверждают эту гипотезу?"},
+                             previous=previous)
+        cited = set(previous["report"]["hypotheses"][0]["evidence_ids"])
+        self.assertEqual({row["id"] for row in fresh["reply"]["previous_evidence"]}, cited)
+        self.assertNotEqual(fresh["report"]["run_id"], previous["report"]["run_id"])
+
     def test_chat_preserves_model_tool_trace_and_clarifies_missing_windows(self):
         steps = iter(["sales", "funnel", "finish"])
         def decide(*_):

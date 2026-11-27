@@ -11,10 +11,13 @@ MAX_QUESTION = 500
 SCOPE_KEYS = ("config", "memory", "metrika", "web", "task_id")
 FOLLOW_UP = re.compile(
     r"^(?:а\s+)?(?:почему это|что (?:ей|ему|этому|им) противоречит|"
-    r"чем это|где это|как это|что ещё|что еще|что проверить|как измерить)|"
+    r"чем это|где это|как это|что ещё|что еще|что проверить|как измерить|"
+    r"какие доказательства подтверждают|какие данные противоречат)|"
     r"\b(?:эт[уаой]|предыдущую|первую|вторую) гипотез\w*",
     re.IGNORECASE,
 )
+COUNTEREVIDENCE = re.compile(r"противореч", re.I)
+SUPPORT = re.compile(r"доказательств|подтвержд", re.I)
 HISTORICAL_WINDOWS = re.compile(r"год назад|прошл\w+ год|\bквартал\w*\b|\b20\d\d\b.+\b20\d\d\b", re.I)
 MEASUREMENT_FOCUS = {
     "compare_history": {"historical_metric", "historical_comparison"},
@@ -57,13 +60,18 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     effective_scope = ((prior or {}).get("scope", {}) | scope)
     effective_scope = {key: value for key, value in effective_scope.items() if value is not None}
     query = question
+    hypothesis = None
+    old_report = (prior or {}).get("report") or {}
+    evidence_question = bool(COUNTEREVIDENCE.search(question) or SUPPORT.search(question))
     if prior and not off_topic(question):
         context = "\nПредыдущий вопрос: " + prior["question"][:115]
-        old_report = prior.get("report") or {}
         hypotheses = old_report.get("hypotheses") or []
-        if hypotheses and effective_scope == prior.get("scope") and "гипотез" in question.casefold():
+        if hypotheses and effective_scope == prior.get("scope") and (
+            evidence_question or "гипотез" in question.casefold()
+        ):
             index = 1 if "втор" in question.casefold() and len(hypotheses) > 1 else 0
-            context += "\nПредыдущая гипотеза для проверки: " + hypotheses[index]["cause"][:100]
+            hypothesis = hypotheses[index]
+            context += "\nПредыдущая гипотеза для проверки: " + hypothesis["cause"][:100]
         if MAX_QUESTION - len(question) > 32:
             query = (query + context)[:MAX_QUESTION]
     memory = effective_scope.get("memory", {})
@@ -97,4 +105,13 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     view = report_view(report, focus=focus)
     if turn["previous_run_id"]:
         view["previous_run_id"] = turn["previous_run_id"]
+    if hypothesis and evidence_question:
+        contrary = bool(COUNTEREVIDENCE.search(question))
+        refs = hypothesis["contradictions" if contrary else "evidence_ids"]
+        view["previous_evidence"] = [item for item in old_report["evidence"] if item["id"] in refs]
+        if contrary:
+            view["answer"] = ("В предыдущем ответе указаны противоречащие источники."
+                              if refs else "В предыдущем ответе противоречащие источники не указаны.")
+        else:
+            view["answer"] = "Источники, на которые опиралась предыдущая гипотеза."
     return turn | {"report": report, "reply": view}

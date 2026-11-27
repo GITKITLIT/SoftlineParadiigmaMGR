@@ -41,7 +41,10 @@ def report_view(report, *, focus=None):
     elif measurements:
         conclusion = measurements[0]["text"]
     elif observations:
-        conclusion = f"Доступные наблюдения по вопросу: {len(observations)}."
+        first = observations[0]
+        conclusion = f"{first['ref']} · {first['text'][:150]}" if focus and first.get("text") else (
+            f"Доступные наблюдения по вопросу: {len(observations)}."
+        )
     else:
         conclusion = "По выбранным источникам данных для ответа недостаточно."
     measurement_gap = any(row.get("relation") == "cart_measurement_gap" for row in report["findings"])

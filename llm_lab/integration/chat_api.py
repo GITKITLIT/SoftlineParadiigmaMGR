@@ -82,6 +82,8 @@ def start(owner, identifier, body):
 
     def analyze(request, *, progress):
         turn = chat.consult(request, previous=prior, progress=progress)
+        if turn["previous_run_id"]:
+            turn["reply"]["previous_position"] = version
         position = chat_store.append(owner, identifier, version, turn)
         return {"run_id": position}
 

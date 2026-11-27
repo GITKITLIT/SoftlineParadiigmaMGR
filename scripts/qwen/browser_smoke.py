@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 
-def smoke(url, question, live):
+def smoke(url, question, live, follow_up):
     parsed = urlsplit(url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.username or parsed.password:
         raise ValueError("Use the isolated loopback preview")
@@ -18,6 +18,8 @@ def smoke(url, question, live):
         errors = []
         page.on("pageerror", lambda error: errors.append(type(error).__name__))
         page.goto(base)
+        if live:
+            expect(page.locator("#qwen-release")).to_be_visible()
         fab = page.locator("#qwen-fab")
         expect(fab).to_be_visible()
         anchor = fab.bounding_box()
@@ -30,10 +32,14 @@ def smoke(url, question, live):
         panel = page.locator("#qwen-panel")
         expect(panel).to_be_visible()
         prompt = page.locator("#qwen-question")
+        ask = panel.get_by_role("button", name="Спросить", exact=True)
+        expect(ask).to_be_enabled()
         prompt.fill(question)
         prompt.press("Shift+Enter")
         assert prompt.input_value().endswith("\n")
-        prompt.press("Enter")
+        with page.expect_response(lambda r: r.url.endswith("/api/qwen/start"), timeout=10000) as started:
+            prompt.press("Enter")
+        assert started.value.ok
         expect(panel.locator("#qwen-log article").last).to_contain_text(question, timeout=180000)
         dialog_id = page.locator("#qwen-dialogs").input_value()
         turns = context.request.post(base + "/api/qwen/history", data={"dialog_id": dialog_id}).json()["turns"]
@@ -62,6 +68,17 @@ def smoke(url, question, live):
         assert repeated.ok and repeated.json()["id"] == saved["id"]
         assert saved["tag"] == "сгенерирована ИИ-помощником"
         assert saved["title"] == title
+        if follow_up:
+            question_two = "Какие доказательства подтверждают эту гипотезу?"
+            expect(ask).to_be_enabled()
+            prompt.fill(question_two)
+            with page.expect_response(lambda r: r.url.endswith("/api/qwen/start"), timeout=10000) as started:
+                prompt.press("Enter")
+            assert started.value.ok
+            second = panel.locator("#qwen-log article").last
+            expect(second).to_contain_text(question_two, timeout=180000)
+            expect(second.get_by_role("link", name="Предыдущий вопрос")).to_have_attribute("href", "#qwen-turn-1")
+            expect(second.get_by_text("Источники из предыдущего ответа")).to_be_visible()
         observed = context.request.post(base + "/api/tasks/review", data={"task_id": saved["id"]}).json()
         assert observed["status"] == "waiting_for_data"
         page.reload()
@@ -79,7 +96,8 @@ def smoke(url, question, live):
         page.keyboard.press("Escape")
         expect(panel).to_be_hidden()
         assert not errors, errors
-        print("Browser: drag, Enter, details, edit, confirm, replay, private history, mobile, shared backlog, effect waiting")
+        print("Browser: drag, Enter, details, edit, confirm, replay, private history, mobile, shared backlog, effect waiting"
+              + (", previous question and citations" if follow_up else ""))
         browser.close()
 
 
@@ -89,6 +107,7 @@ if __name__ == "__main__":
     parser.add_argument("--isolated-database", action="store_true", required=True,
                         help="Confirm the preview uses a disposable state directory")
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--follow-up", action="store_true")
     parser.add_argument("--question", default="Почему снизились заказы? Проверь воронку, интервью, конкурентов и бэклог.")
     args = parser.parse_args()
-    smoke(args.url, args.question, args.live)
+    smoke(args.url, args.question, args.live, args.follow_up)

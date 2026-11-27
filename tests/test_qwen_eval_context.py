@@ -1,11 +1,13 @@
 """Regression checks for constrained qualitative inference and tool scope."""
 
+import io
+import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from llm_lab.synthesis import qualitative_input
 from pm import agent, chat, qwen
-from pm.analysis_context import TOOLS
+from pm.analysis_context import TOOLS, entry
 
 
 class ContextTests(unittest.TestCase):
@@ -30,6 +32,21 @@ class ContextTests(unittest.TestCase):
         backend.run.assert_called_once_with("sales", {})
         self.assertFalse(agent.valid_action({"tool": "sales", "arguments": {"extra": True}, "purpose": "measure"}, TOOLS))
         self.assertTrue(all(row.get("actor") != "qwen" for row in trace if row["step"] == "tool"))
+
+    def test_source_text_stays_in_data_and_dummy_credential_is_redacted(self):
+        marker = "Проверочная метка янтарь"
+        source = entry("file:fixture", "interview", "Фикстура", marker + " password: fixture-only",
+                       mode="synthetic", quality="excerpt")
+        response = {"choices": [{"message": {"content": '{"hypotheses":[]}'}}]}
+        opener = Mock(return_value=io.BytesIO(json.dumps(response).encode()))
+        with patch.dict("os.environ", {"PM_LLM_URL": "http://127.0.0.1:18081/v1"}, clear=True):
+            status, _, _, _ = qwen.infer("Что известно о покупке?", [source], opener=opener, planning=False)
+        self.assertEqual(status, "ok")
+        request = json.loads(opener.call_args.args[0].data)
+        system, data = request["messages"]
+        self.assertNotIn(marker, system["content"])
+        self.assertIn(marker, data["content"])
+        self.assertNotIn("fixture-only", data["content"])
 
     def test_malformed_and_unknown_references_fail_validation(self):
         with self.assertRaises(ValueError):

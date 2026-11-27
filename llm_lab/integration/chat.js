@@ -206,7 +206,14 @@
     if (view.notice) block.append(element("p", view.notice));
     if (!view.sources) return block;
     if (view.data_mode === "synthetic") block.append(element("p", "Синтетические данные"));
-    if (view.previous_run_id) block.append(element("p", "Продолжение предыдущего расследования"));
+    if (view.previous_position) {
+      const link = element("a", "Предыдущий вопрос");
+      link.href = "#qwen-turn-" + view.previous_position;
+      block.append(link);
+    }
+    if (view.previous_evidence?.length) {
+      block.append(details("Источники из предыдущего ответа", view.previous_evidence.map(source)));
+    }
     if (view.measurements.length || view.observations.length) {
       block.append(details("Наблюдения", [
         ...view.measurements.map((item) => {
@@ -296,6 +303,7 @@
 
   function turnBlock(question, answer, position, view) {
     const wrapper = element("article");
+    wrapper.id = "qwen-turn-" + position;
     const prompt = element("p", question);
     prompt.className = "qwen-user";
     wrapper.append(prompt);
