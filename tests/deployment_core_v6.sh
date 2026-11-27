@@ -80,6 +80,7 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$release/.venv/bin/python" scripts/searc
 # Verify that the outbox itself is included in the retained and restore-tested v6 state.
 systemctl start paradiigma-backup.service
 v6_snapshot=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["source_schema"]==6; print(d["snapshot_id"])' "$status")
+bash "$release/deploy/check_backup_isolation.sh"
 bash scripts/deploy/restore.sh "$v6_snapshot"
 runuser -u pm-app -- /usr/bin/python3 - "$db" <<'PY'
 import sqlite3
