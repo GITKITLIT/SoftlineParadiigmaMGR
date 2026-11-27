@@ -1,11 +1,10 @@
 [Unit]
-Description=Run independent ParadiigmaMGR backups hourly
+Description=Daily PARADIIGMA database backup and recovery drill
 
 [Timer]
-OnCalendar=hourly
-Persistent=true
-RandomizedDelaySec=120
-Unit=paradiigma-backup.service
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=yes
+RandomizedDelaySec=15min
 
 [Install]
 WantedBy=timers.target

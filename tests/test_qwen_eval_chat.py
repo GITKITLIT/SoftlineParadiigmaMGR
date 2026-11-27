@@ -1,5 +1,6 @@
 """Regression coverage for the chat layer and its private integration contract."""
 import os
+from pathlib import Path
 import tempfile
 import threading
 import unittest
@@ -9,7 +10,9 @@ from unittest.mock import Mock, patch
 
 from llm_lab.integration import chat_api, chat_store
 import app
-from pm import ai_store, brief, chat, investigation
+from pm import ai_store, brief, chat, email_notifications, investigation, monitor
+from pm.settings import ROOT
+from scripts import pim_backup
 
 
 class ChatTests(unittest.TestCase):
@@ -67,6 +70,39 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(state["status"], "ready")
         self.assertEqual(chat_store.history("owner-a", dialog)[0]["question"], body["question"])
 
+    def test_backup_restores_chat_task_evidence_and_queued_email(self):
+        owner = "owner-a"
+        dialog = chat_store.create(owner)
+        turn = chat.consult({"question": "Почему заказы снизились?"})
+        chat_store.append(owner, dialog, 0, turn)
+        task = chat_api.approve(turn, {"proposal_id": turn["report"]["proposed_tasks"][0]["id"],
+                                       "target": 105, "confirm": True})
+        with patch.dict(os.environ, {
+            "PM_EMAIL_ENABLED": "true", "PM_SMTP_HOST": "localhost",
+            "PM_EMAIL_FROM": "sender@example.invalid", "PM_EMAIL_TO": "recipient@example.invalid",
+            "PM_EMAIL_REPORT_BASE_URL": "https://example.invalid",
+        }), patch.object(email_notifications, "deliver_pending"):
+            result = monitor.check({}, proactive=True)
+        with tempfile.TemporaryDirectory() as external:
+            snapshot, manifest = pim_backup.create(Path(os.environ["PM_PRIVATE_DIR"]) / "ai.sqlite3",
+                                                   Path(external) / "vault")
+            restored = Path(external) / "restored"
+            pim_backup.restore(snapshot, restored)
+            self.assertEqual(manifest["sqlite_version"], ai_store.SCHEMA_VERSION)
+            with patch.dict(os.environ, {"PM_PRIVATE_DIR": str(restored)}):
+                self.assertEqual(chat_store.history(owner, dialog)[0]["question"], turn["question"])
+                self.assertEqual(chat_store.dialogs("owner-b"), [])
+                self.assertEqual(ai_store.task_list()[0]["id"], task["id"])
+                self.assertEqual(ai_store.notifications()[0]["run_id"], result["run_id"])
+                self.assertEqual(ai_store.notifications()[0]["email_status"], "pending")
+                self.assertTrue(ai_store.run(task["run_id"])["evidence"])
+
+    def test_local_overview_and_search_exclude_bundled_demo_corpus(self):
+        self.assertTrue(app.api("/api/search", {"query": "корзина"})["hits"])
+        with patch.dict(os.environ, {"PM_SNAPSHOT": str(ROOT / "data/demo-overview.json")}):
+            self.assertEqual(app.api("/api/search", {"query": "корзина"})["hits"], [])
+            self.assertNotIn("Демо · событие корзины", app.page())
+
     def test_private_follow_up_and_new_scope(self):
         analyzer = Mock(wraps=investigation.analyze)
         first = chat.consult({"question": "Почему заказы снизились?"}, analyze=analyzer)
@@ -113,6 +149,19 @@ class ChatTests(unittest.TestCase):
         result = brief.release_brief(saved["run_id"])
         self.assertEqual(result["run_id"], saved["run_id"])
         self.assertEqual(result["sources"], ai_store.run(saved["run_id"])["evidence"])
+        self.assertEqual(len(ai_store.recent()), 1)
+
+        owner = "owner-a"
+        dialog = chat_store.create(owner)
+        turn = chat.consult({"question": "Что изменилось после релиза?"})
+        chat_store.append(owner, dialog, 0, turn)
+        body = {"dialog_id": dialog, "position": 1}
+        with patch.object(investigation, "analyze", side_effect=AssertionError("Use the saved report")):
+            private = chat_api.route("brief", owner, body)
+        self.assertEqual(private["run_id"], turn["reply"]["run_id"])
+        self.assertEqual(private["sources"], chat_api.route("turn", owner, body)["sources"])
+        with self.assertRaisesRegex(ValueError, "не найден"):
+            chat_api.route("brief", "owner-b", body)
         self.assertEqual(len(ai_store.recent()), 1)
 
     def test_effect_plan_uses_the_previous_report_when_its_scope_matches(self):

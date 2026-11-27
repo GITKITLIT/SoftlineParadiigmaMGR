@@ -1,22 +1,36 @@
 [Unit]
-Description=Independent ParadiigmaMGR verified SQLite backup
-RequiresMountsFor=/var/lib/paradiigma /var/lib/paradiigma-backup
+Description=Create and restore-test an independent PARADIIGMA snapshot
+Requires=run-paradiigma_backup_input.mount paradiigma-backup-reader.service
+After=run-paradiigma_backup_input.mount paradiigma-backup-reader.service
+RequiresMountsFor=/var/backups/paradiigma /opt/paradiigma/current
 
 [Service]
 Type=oneshot
-User=paradiigma-backup
-Group=paradiigma-backup
-SupplementaryGroups=pim-status
-Environment=PYTHONDONTWRITEBYTECODE=1
-StateDirectory=paradiigma-backup
-StateDirectoryMode=0700
-ReadOnlyPaths=/var/lib/paradiigma
-ReadWritePaths=/var/lib/paradiigma-backup-status
-ExecStart=/usr/bin/python3 /opt/paradiigma/scripts/pim_backup.py create --db /var/lib/paradiigma/ai.sqlite3 --directory /var/lib/paradiigma-backup --status-file /var/lib/paradiigma-backup-status/status.json
-TimeoutStartSec=180
+User=pm-backup
+Group=pm-backup
+SupplementaryGroups=pm-db
 UMask=0077
-NoNewPrivileges=true
+Environment=PARADIIGMA_RETENTION_DAYS=14
+ExecStart=/usr/bin/python3 -IB /opt/paradiigma/current/scripts/deploy/backup.py --retain-days ${PARADIIGMA_RETENTION_DAYS}
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateNetwork=true
+ReadWritePaths=/var/backups/paradiigma /var/lib/paradiigma-backup-status
+InaccessiblePaths=/var/lib/paradiigma -/etc/paradiigma -/etc/ssh -/root
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes

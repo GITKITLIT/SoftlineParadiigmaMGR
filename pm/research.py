@@ -89,8 +89,10 @@ def index_range(path, sheet, area, kind, target=None):
     return len(items)
 
 
-def evidence():
+def evidence(*, include_demo=True):
     external = os.getenv("PM_EVIDENCE")
+    if not external and not include_demo:
+        return []
     path = Path(external) if external else ROOT / "data/demo-evidence.json"
     return visible_excerpts(json.loads(path.read_text(encoding="utf-8-sig")))
 
@@ -113,8 +115,8 @@ def imported_sources():
     return visible_excerpts(list({item["id"]: item for item in old + stored_excerpts()}.values()))
 
 
-def sources():
-    return evidence() + imported_sources()
+def sources(*, include_demo=True):
+    return evidence(include_demo=include_demo) + imported_sources()
 
 
 def tokens(text):

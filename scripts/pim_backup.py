@@ -24,6 +24,32 @@ def external(path):
     return path
 
 
+def external_input(path):
+    # Retain the final component so a nosymfollow input mount can enforce the
+    # policy in the kernel at open time, even if a writer replaces the file.
+    path = Path(path)
+    result = external(path.parent) / path.name
+    if path.name in {"", ".", ".."} or result.is_symlink():
+        raise ValueError("Недопустимый путь к исходному файлу")
+    return result
+
+
+def migration_state(source):
+    stat = source.stat(follow_symlinks=False)
+    wal = source.with_name(source.name + "-wal")
+    try:
+        pending_wal = wal.stat(follow_symlinks=False).st_size > 0
+    except FileNotFoundError:
+        pending_wal = False
+    return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size), pending_wal
+
+
+def migration_fields(source, before, schema):
+    after = migration_state(source)
+    return {"source_schema": schema, "source_mtime_ns": after[0][2], "source_size": after[0][3],
+            "source_quiescent": before == after and not after[1]}
+
+
 def checksum(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -66,12 +92,12 @@ def write_status(path, fields):
 
 
 def create(database, directory, documents=(), status=None):
-    source, directory = external(database), external(directory)
+    source, directory = external_input(database), external(directory)
     if (not source.is_file() or directory.is_relative_to(source.parent)
             or source.parent.is_relative_to(directory)):
         raise ValueError("Для копии нужен отдельный каталог вне состояния приложения")
     started = utc()
-    source_before = source.stat()
+    source_before = migration_state(source) if status is not None else None
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = directory / ("pim-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:12])
     target.mkdir(mode=0o700)
@@ -86,7 +112,7 @@ def create(database, directory, documents=(), status=None):
     version = check_database(copied)
     files = {DB_NAME: checksum(copied)}
     for document in documents:
-        document = external(document)
+        document = external_input(document)
         if (not document.is_file() or document.suffix.casefold() not in DOCUMENT_MIME
                 or document.stat().st_size > 100_000_000 or document.name.casefold() in {DB_NAME, "manifest.json"}):
             raise ValueError("Недопустимый файл приложения к копии")
@@ -100,12 +126,10 @@ def create(database, directory, documents=(), status=None):
         json.dump(manifest, output, indent=2)
         output.flush()
         os.fsync(output.fileno())
-    source_after = source.stat()
-    write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"],
-                          "source_schema": version, "source_mtime_ns": source_after.st_mtime_ns,
-                          "source_size": source_after.st_size,
-                          "source_quiescent": (source_before.st_mtime_ns, source_before.st_size) ==
-                                              (source_after.st_mtime_ns, source_after.st_size)})
+    if source_before is not None:
+        fields = migration_fields(source, source_before, version)
+        write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"],
+                              **fields})
     return target, manifest
 
 

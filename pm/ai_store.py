@@ -31,7 +31,11 @@ def require_migration_snapshot(path, version):
             raise ValueError
         record = json.loads(file.read_text(encoding="utf8"))
         fingerprint = path.stat()
-        if (record["status"] == "ok" and record["source_quiescent"] is True
+        try:
+            pending_wal = path.with_name(path.name + "-wal").stat().st_size > 0
+        except FileNotFoundError:
+            pending_wal = False
+        if (not pending_wal and record["status"] == "ok" and record["source_quiescent"] is True
                 and record["source_schema"] == version
                 and record["source_mtime_ns"] == fingerprint.st_mtime_ns
                 and record["source_size"] == fingerprint.st_size):

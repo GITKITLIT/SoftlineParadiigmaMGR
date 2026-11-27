@@ -1,0 +1,11 @@
+[Unit]
+Description=Read-only SQLite input for PARADIIGMA backup
+RequiresMountsFor=/var/lib/paradiigma/db
+Before=paradiigma-backup.service
+
+[Mount]
+What=/var/lib/paradiigma/db
+Where=/run/paradiigma_backup_input
+Type=none
+Options=bind,ro,nosymfollow,nosuid,nodev,noexec
+DirectoryMode=0700

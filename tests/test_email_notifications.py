@@ -47,7 +47,7 @@ class SmtpHandler(socketserver.BaseRequestHandler):
                     self.server.authenticated_over_tls.append(encrypted)
                     response = b"535 fixture-auth-failure do-not-log\r\n" if server.reject_auth else b"235 OK\r\n"
                 elif command == b"RCPT":
-                    server.recipients.append(arg.decode("ascii").removeprefix("to:"))
+                    server.recipients.append(arg.decode("ascii").partition(":")[2])
                     response = b"250 OK\r\n"
                 elif command == b"DATA":
                     conn.sendall(b"354 continue\r\n")

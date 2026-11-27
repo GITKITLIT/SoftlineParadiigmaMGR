@@ -1,31 +1,50 @@
 [Unit]
-Description=ParadiigmaMGR local product intelligence backend
-After=network-online.target
+Description=PARADИИGMA product assistant
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=4
 
 [Service]
-Type=simple
-User=paradiigma
-Group=paradiigma
-SupplementaryGroups=pim-status
-WorkingDirectory=/opt/paradiigma
-Environment=PM_PRIVATE_DIR=/var/lib/paradiigma
-Environment=PM_DB_MAX_MIB=2048
-Environment=PM_BACKUP_STATUS_FILE=/var/lib/paradiigma-backup-status/status.json
-Environment=PM_MIGRATION_STATUS_FILE=/var/lib/paradiigma-backup-status/status.json
-EnvironmentFile=-/etc/paradiigma/backend.env
-ExecStart=/opt/paradiigma/.venv/bin/python /opt/paradiigma/app.py serve --port 8080
-StateDirectory=paradiigma
-StateDirectoryMode=0750
-UMask=0027
+Type=exec
+User=pm-app
+Group=pm-app
+SupplementaryGroups=pm-db
+WorkingDirectory=/opt/paradiigma/current
+EnvironmentFile=/etc/paradiigma/app.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ExecStartPre=/opt/paradiigma/current/.venv/bin/python scripts/deploy/preflight.py
+ExecStart=/opt/paradiigma/current/.venv/bin/python app.py serve --port 8080
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=25
-NoNewPrivileges=true
+KillSignal=SIGINT
+TimeoutStopSec=45
+UMask=0027
 ProtectSystem=strict
+ReadWritePaths=/var/lib/paradiigma/db
+InaccessiblePaths=-/etc/paradiigma -/var/backups/paradiigma -/var/lib/paradiigma/models
 ProtectHome=true
 PrivateTmp=true
-ReadOnlyPaths=-/var/lib/paradiigma-backup-status
-InaccessiblePaths=-/var/lib/paradiigma-backup -/etc/paradiigma-backup
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitCORE=0
+TasksMax=128
+MemoryHigh=2G
+MemoryMax=3G
+CPUQuota=200%
+# Tracebacks on malformed private inputs may contain fragments. Preflight is sanitized.
+StandardOutput=journal
+StandardError=null
 
 [Install]
 WantedBy=multi-user.target

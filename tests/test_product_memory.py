@@ -332,6 +332,32 @@ class ProductMemoryTests(unittest.TestCase):
                 self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], ai_store.SCHEMA_VERSION)
                 self.assertEqual(db.execute("SELECT count(*) FROM email_outbox").fetchone()[0], 0)
 
+    def test_migration_waits_for_closed_writer_and_fresh_snapshot(self):
+        self.active.mkdir()
+        database = self.active / pim_backup.DB_NAME
+        status = self.folder / "migration.json"
+        with closing(sqlite3.connect(database)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("CREATE TABLE runs(id TEXT PRIMARY KEY, created TEXT, report TEXT)")
+            db.execute("CREATE TABLE imported_evidence(id TEXT PRIMARY KEY, collection TEXT, body TEXT)")
+            db.execute("PRAGMA user_version=4")
+            db.commit()
+        with patch.dict(os.environ, {"PM_MIGRATION_STATUS_FILE": str(status)}):
+            pim_backup.create(database, self.folder / "snapshots", status=status)
+            self.assertIs(json.loads(status.read_text())["source_quiescent"], True)
+            with closing(sqlite3.connect(database)) as writer:
+                writer.execute("INSERT INTO runs VALUES ('fixture', '2025-01-01', '{}')")
+                writer.commit()
+                with self.assertRaisesRegex(ValueError, "проверенной независимой"):
+                    with ai_store.database():
+                        pass
+                pim_backup.create(database, self.folder / "snapshots", status=status)
+                self.assertIs(json.loads(status.read_text())["source_quiescent"], False)
+            pim_backup.create(database, self.folder / "snapshots", status=status)
+            with ai_store.database() as db:
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], getattr(ai_store, "SCHEMA_VERSION", 5))
+                self.assertEqual(db.execute("SELECT id FROM runs").fetchone()["id"], "fixture")
+
     def test_rejected_decision_is_not_reproposed_without_new_evidence(self):
         request = {"query": "Почему упали заказы?"}
         first = investigation.analyze(request)

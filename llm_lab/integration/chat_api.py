@@ -71,7 +71,7 @@ def local_owner(handler, *, create=False):
 def route(path, owner, body):
     if path == "dialogs":
         return {"dialogs": chat_store.dialogs(owner) if owner else []}
-    if path == "brief":
+    if path == "brief" and "dialog_id" not in body:
         return brief.release_brief(body["run_id"])
     if path == "brief-latest":
         for item in ai_store.recent():
@@ -89,11 +89,15 @@ def route(path, owner, body):
         raise ValueError(chat_store.NOT_FOUND)
     if path == "history":
         return {"turns": chat_store.history(owner, identifier)}
-    if path in {"turn", "approve"}:
+    if path in {"turn", "approve", "brief"}:
         position = body.get("position")
         if type(position) is not int or position < 1:
             raise ValueError("Укажите сообщение диалога.")
         turn = chat_store.get_turn(owner, identifier, position)
+        if path == "brief":
+            if turn["report"] is None:
+                raise ValueError("В сообщении нет сохранённого расследования.")
+            return brief.report_view(turn["report"])
         return turn["reply"] if path == "turn" else approve(turn, body)
     if path == "start":
         return start(owner, identifier, body)

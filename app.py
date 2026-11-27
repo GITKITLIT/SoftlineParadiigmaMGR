@@ -32,8 +32,14 @@ def frontend_script(*, qwen_chat=False):
     return with_chat(original, ROOT)
 
 
-def page(data=None, *, qwen_chat=False):
+def demo_overview():
+    return not any(os.getenv(name) for name in ("PM_WORKBOOK", "PM_SNAPSHOT"))
+
+
+def page(data=None, *, qwen_chat=False, include_demo=None):
     data = data or overview()
+    if include_demo is None:
+        include_demo = demo_overview()
     benchmark = os.getenv("PM_BENCHMARK")
     example = json.loads(Path(benchmark).read_text(encoding="utf-8-sig")) if benchmark else None
     html = (ROOT / "web/index.html").read_text(encoding="utf8")
@@ -50,7 +56,7 @@ def page(data=None, *, qwen_chat=False):
             as_json(
                 dict(
                     data=data,
-                    evidence=evidence(),
+                    evidence=evidence(include_demo=include_demo),
                     example=example,
                 )
             ).replace("<", "\\u003c"),
@@ -103,7 +109,7 @@ def api(route, b):
     if route == "/api/overview":
         return recalculate(overview(), b)
     if route == "/api/search":
-        return {"hits": search(str(b["query"])[:500], sources())}
+        return {"hits": search(str(b["query"])[:500], sources(include_demo=demo_overview()))}
     if route == "/api/import":
         return local_doc(b)
     if route == "/api/analyze":
@@ -343,7 +349,7 @@ def main():
             else recalculate(overview(), cfg)
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(page(snapshot), encoding="utf8")
+        dest.write_text(page(snapshot, include_demo=not args.workbook and demo_overview()), encoding="utf8")
         print(dest)
 
 

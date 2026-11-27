@@ -486,11 +486,7 @@ class InvestigationContext:
 
     def research(self, competitors):
         if self.corpus is None:
-            if self.mode == "local" and not os.getenv("PM_EVIDENCE"):
-                from .research import imported_sources
-                self.corpus = imported_sources()
-            else:
-                self.corpus = sources()
+            self.corpus = sources(include_demo=self.mode != "local")
         items = [item for item in self.corpus if (item["kind"] == "Конкуренты") == competitors]
         hits = search(self.query, items)[:6]
         for item in hits:

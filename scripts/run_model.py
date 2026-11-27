@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--server", default="llama-server")
 parser.add_argument("--model", type=Path, default=private_dir() / NAME)
 parser.add_argument("--download", action="store_true")
+parser.add_argument("--parallel", type=int, choices=(1, 2), default=1)
+parser.add_argument("--gpu-layers", type=int, default=0)
 args = parser.parse_args()
 binary = shutil.which(args.server)
 if not binary:
@@ -45,26 +48,24 @@ if not args.model.exists():
     tmp.replace(args.model)
 elif checksum(args.model) != DIGEST:
     sys.exit("Неверная контрольная сумма GGUF.")
-sys.exit(
-    subprocess.call(
-        [
-            binary,
-            "-m",
-            str(args.model),
-            "-a",
-            "qwen3-4b",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "18081",
-            "-c",
-            "6144",
-            "-np",
-            "1",
-            "-t",
-            "5",
-            "--chat-template-kwargs",
-            '{"enable_thinking":false}',
-        ]
-    )
-)
+try:
+    capability = subprocess.run([binary, "--help"], capture_output=True, timeout=10, check=True)
+except (OSError, subprocess.SubprocessError):
+    sys.exit("Не удалось проверить параметры llama.cpp.")
+help_text = (capability.stdout + capability.stderr).decode("utf-8", errors="replace")
+
+command = [
+    binary, "--model", str(args.model), "--alias", "qwen3-4b",
+    "--host", "127.0.0.1", "--port", "18081",
+    "--ctx-size", str(args.parallel * 8192), "--parallel", str(args.parallel),
+    "--threads", "4", "--threads-batch", "8", "--gpu-layers", str(args.gpu_layers),
+    "--chat-template-kwargs", '{"enable_thinking":false}',
+]
+if re.search(r"(?<!\w)--reasoning(?=[\s,=])", help_text):
+    command += ["--reasoning", "off"]
+if re.search(r"(?<!\w)--cache-ram(?=[\s,=])", help_text):
+    command += ["--cache-ram", "512"]
+else:
+    print("Этот llama.cpp не поддерживает --cache-ram. Для лимита 512 МиБ нужен совместимый runtime.",
+          file=sys.stderr)
+sys.exit(subprocess.call(command))

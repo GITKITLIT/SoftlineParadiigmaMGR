@@ -1,0 +1,50 @@
+[Unit]
+Description=PARADИИGMA loopback Qwen inference
+After=network.target apparmor.service
+Requires=apparmor.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=pm-qwen
+Group=pm-qwen
+WorkingDirectory=/opt/paradiigma/current
+Environment=PM_PRIVATE_DIR=/var/lib/paradiigma/models PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -B scripts/run_model.py --server /usr/local/bin/llama-server --model /var/lib/paradiigma/models/Qwen3-4B-Q4_K_M.gguf
+AppArmorProfile=paradiigma-launcher
+Restart=on-failure
+RestartSec=8
+TimeoutStopSec=30
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+InaccessiblePaths=-/etc/paradiigma -/var/backups/paradiigma -/var/lib/paradiigma/db -/var/lib/paradiigma/documents -/var/lib/paradiigma-backup-status
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=~connect
+SystemCallErrorNumber=EPERM
+IPAddressDeny=any
+IPAddressAllow=localhost
+TasksMax=96
+MemoryHigh=6G
+MemoryMax=8G
+CPUQuota=500%
+LimitCORE=0
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
