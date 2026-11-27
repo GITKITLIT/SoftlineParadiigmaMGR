@@ -69,7 +69,8 @@ class TransportIntegrationTests(unittest.TestCase):
         path, auth, body = wire[-1]
         self.assertEqual(path, "/v2/web/search")
         self.assertEqual(auth, "Api-Key " + KEY)
-        self.assertEqual(body["query"]["queryText"], 'site:example.com "Демо Pro" лицензия')
+        self.assertEqual(body["query"]["queryText"],
+                         'site:example.com "Демо Pro" ("лицензия"|"подписка"|"продление")')
         self.assertNotIn(KEY, json.dumps(first))
 
 

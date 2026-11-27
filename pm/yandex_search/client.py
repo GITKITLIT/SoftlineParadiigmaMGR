@@ -4,6 +4,7 @@ import http.client
 import json
 import random
 import ssl
+from time import monotonic
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -59,6 +60,29 @@ def _validate_status(response):
     raise SearchFailure("request_rejected" if status == 400 else "unexpected_http_status")
 
 
+def bounded_body(response, limit, deadline):
+    size = response.getheader("Content-Length")
+    if size is not None:
+        if len(size) > 10 or not size.isascii() or not size.isdigit():
+            raise SearchFailure("invalid_response")
+        size = int(size)
+        if size > limit:
+            raise SearchFailure("response_too_large")
+    data = bytearray()
+    while len(data) <= limit:
+        if monotonic() >= deadline:
+            raise TimeoutError()
+        block = response.read1(min(64 * 1024, limit + 1 - len(data)))
+        if not block:
+            break
+        data.extend(block)
+    if len(data) > limit:
+        raise SearchFailure("response_too_large")
+    if size is not None and size != len(data):
+        raise SearchFailure("truncated_response", "unavailable", retry=True)
+    return bytes(data)
+
+
 def request_once(query, config):
     body = json.dumps({
         "query": {
@@ -68,11 +92,12 @@ def request_once(query, config):
         "folderId": config.folder,
         "responseFormat": "FORMAT_XML",
         "groupSpec": {
-            "groupMode": "GROUP_MODE_FLAT", "groupsOnPage": str(config.max_results),
+            "groupMode": "GROUP_MODE_FLAT", "groupsOnPage": str(min(100, 2 * config.max_results)),
             "docsInGroup": "1",
         },
     }).encode("utf-8")
     headers = {"Authorization": "Api-Key " + config.api_key, "Content-Type": "application/json"}
+    deadline = monotonic() + 2 * TIMEOUT_SECONDS
     try:
         # Direct TLS with the platform trust store. http.client does not follow redirects.
         conn = http.client.HTTPSConnection(_HOST, timeout=TIMEOUT_SECONDS)
@@ -80,11 +105,7 @@ def request_once(query, config):
             conn.request("POST", _PATH, body=body, headers=headers)
             with conn.getresponse() as response:
                 _validate_status(response)
-                length = response.getheader("Content-Length")
-                if length and length.isascii() and length.isdigit():
-                    if len(length) > 10 or int(length) > MAX_HTTP_BYTES:
-                        raise SearchFailure("response_too_large")
-                payload = response.read(MAX_HTTP_BYTES + 1)
+                return bounded_body(response, MAX_HTTP_BYTES, deadline)
         finally:
             conn.close()
     except TimeoutError:
@@ -93,6 +114,3 @@ def request_once(query, config):
         raise SearchFailure("tls_failed", "unavailable") from None
     except (OSError, http.client.HTTPException):
         raise SearchFailure("transport_failed", "unavailable", retry=True) from None
-    if len(payload) > MAX_HTTP_BYTES:
-        raise SearchFailure("response_too_large")
-    return payload

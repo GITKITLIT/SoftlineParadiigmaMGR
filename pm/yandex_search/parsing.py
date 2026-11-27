@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
-from pm.search_security import source_url
+from pm.search_security import TOPIC_SYNONYMS, canonical_evidence_url, source_url
 
 from .client import MAX_HTTP_BYTES, SearchFailure
 
@@ -114,11 +114,31 @@ def _decode(payload):
     return response
 
 
-def parse_response(payload, *, domain, topic, query, product, retrieved_at, limit, secret):
+def relevance_score(title, text, names, topic):
+    def terms(value):
+        return set(re.findall(r"[^\W_]+", value.casefold()))
+    title_terms, snippet_terms = terms(title), terms(text)
+    all_terms = title_terms | snippet_terms
+    name_terms = [terms(name) for name in names]
+    topic_terms = terms(" ".join(TOPIC_SYNONYMS[topic]))
+    topic_matches = sum(any(word.startswith(term[:5]) for word in all_terms) for term in topic_terms)
+    return (
+        8 * any(values <= title_terms for values in name_terms)
+        + 4 * any(values <= all_terms for values in name_terms)
+        + min(4, topic_matches)
+    )
+
+
+def parse_response(payload, *, domain, topic, query, product, retrieved_at, limit, secret,
+                   variants=(), diagnostics=None):
     response = _decode(payload)
+    if diagnostics is not None:
+        diagnostics.update(format="FORMAT_XML", response_bytes=len(payload))
     errors = response.findall("error")
     if errors:
         codes = {node.get("code") for node in errors}
+        if diagnostics is not None:
+            diagnostics["no_results_code"] = codes == {"15"}
         if codes == {"15"}:
             return [], []
         if "32" in codes:
@@ -131,6 +151,9 @@ def parse_response(payload, *, domain, topic, query, product, retrieved_at, limi
     filtered = False
     docs = response.findall("results/grouping/group/doc")
     docs.extend(response.findall("results/doc"))
+    if diagnostics is not None:
+        diagnostics["xml_documents"] = len(docs)
+        diagnostics["xml_with_passages"] = sum(doc.find("passages/passage") is not None for doc in docs)
     for doc in docs:
         url = source_url(doc.findtext("url", ""), domain)
         title = _field(doc, "title", 240)
@@ -144,13 +167,16 @@ def parse_response(payload, *, domain, topic, query, product, retrieved_at, limi
         ):
             filtered = True
             continue
-        key = "web:" + hashlib.sha256((url + "\0" + text).encode("utf-8")).hexdigest()[:32]
+        key_text = canonical_evidence_url(url) + "\0" + text
+        key = "web:" + hashlib.sha256(key_text.encode("utf-8")).hexdigest()[:32]
         results.setdefault(key, {
             "id": key, "kind": "competitor_web", "ref": url, "title": title or domain,
             "text": text, "url": url, "domain": domain, "topic": topic, "query": query,
             "product": product, "content_type": "snippet", "retrieved_at": retrieved_at,
+            "relevance": relevance_score(title, text, (product, *variants), topic),
             **_date_fields(doc),
         })
-        if len(results) >= limit:
-            break
-    return list(results.values()), ["result_filtered"] if filtered else []
+    ranked = sorted(results.values(), key=lambda item: item["relevance"], reverse=True)
+    if diagnostics is not None:
+        diagnostics["retained_documents"] = min(limit, len(ranked))
+    return ranked[:limit], ["result_filtered"] if filtered else []

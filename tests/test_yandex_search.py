@@ -31,6 +31,8 @@ ENV = {
     "YANDEX_SEARCH_API_KEY": KEY,
     "YANDEX_SEARCH_ALLOWED_DOMAINS": '["example.com", "shop.example.com"]',
     "YANDEX_SEARCH_PUBLIC_PRODUCTS": '["Демо Pro"]',
+    "YANDEX_SEARCH_PUBLIC_ALIASES": "{}",
+    "YANDEX_SEARCH_PAGE_FETCH_ENABLED": "false",
     "YANDEX_SEARCH_MAX_RESULTS": "5",
     "YANDEX_SEARCH_MAX_QUERIES_PER_RUN": "5",
     "YANDEX_SEARCH_DAILY_LIMIT": "20",
@@ -91,7 +93,7 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(item["text"], "Лицензия 12 месяцев")
         self.assertEqual(item["ref"], "https://example.com/product")
         self.assertEqual(item["domain"], "example.com")
-        self.assertEqual(item["query"], 'site:example.com "Демо Pro" лицензия')
+        self.assertEqual(item["query"], 'site:example.com "Демо Pro" ("лицензия"|"подписка"|"продление")')
         self.assertEqual(item["modified_at"], "2026-11-20T09:00:00Z")
         self.assertIsNone(item["published_at"])
         self.assertEqual(item["content_type"], "snippet")
@@ -114,6 +116,8 @@ class SearchTests(unittest.TestCase):
         self.assertEqual([r["items"] for r in (first, cached, expired)], [[], [], []])
         self.assertEqual(cached["usage"]["cache_hits"], 1)
         self.assertEqual(expired["usage"]["requests"], 1)
+        self.assertEqual(expired["metrics"]["expired_cache_entries"], 1)
+        self.assertIn("expired_cache", expired["warnings"])
 
     def test_invalid_inputs_and_no_partial_validation(self):
         for changes in (
@@ -136,6 +140,29 @@ class SearchTests(unittest.TestCase):
                 self.assertEqual(self.call(**changes)["reason"], "invalid_input")
         self.request.assert_not_called()
         self.assertEqual(list(self.directory.iterdir()), [])
+
+    def test_public_aliases_and_domain_coverage_with_small_budget(self):
+        self.env["YANDEX_SEARCH_PUBLIC_ALIASES"] = '{"Демо Pro":["Demo Professional","Демо Pro 2026"]}'
+        self.env["YANDEX_SEARCH_MAX_QUERIES_PER_RUN"] = "2"
+        result = self.call(domains=["example.com", "shop.example.com"], topics=["checkout", "support"])
+        args = [call.args[0] for call in self.request.call_args_list]
+        self.assertEqual(len(args), 2)
+        self.assertIn('("Демо Pro"|"Demo Professional"|"Демо Pro 2026")', args[0])
+        self.assertIn('"самостоятельная покупка"', args[0])
+        self.assertTrue(args[1].startswith("site:shop.example.com "))
+        self.assertEqual([x["status"] for x in result["coverage"]], ["ok", "ok", "skipped", "skipped"])
+        self.assertEqual(result["status"], "partial")
+        self.env["YANDEX_SEARCH_PUBLIC_ALIASES"] = '{"Демо Pro":["Demo\" site:evil.com"]}'
+        self.assertEqual(self.call()["reason"], "invalid_configuration")
+        self.assertEqual(self.request.call_count, 2)
+
+    def test_rank_product_listing_and_remove_tracking_duplicates(self):
+        self.env["YANDEX_SEARCH_MAX_RESULTS"] = "1"
+        low = DOC.replace("Демо <hlword>Pro</hlword>", "Прочие товары").replace("/product", "/blog")
+        self.request.return_value = reply(low + DOC + DOC.replace("#price", "?utm_source=search"))
+        item, = self.call()["items"]
+        self.assertEqual(item["title"], "Демо Pro")
+        self.assertGreater(item["relevance"], 8)
 
     def test_fail_closed_configuration(self):
         for name, value, reason in (
@@ -315,7 +342,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(payload, {
             "query": {"searchType": "SEARCH_TYPE_RU", "queryText": "query", "fixTypoMode": "FIX_TYPO_MODE_OFF"},
             "folderId": "synthetic-folder", "responseFormat": "FORMAT_XML",
-            "groupSpec": {"groupMode": "GROUP_MODE_FLAT", "groupsOnPage": "5", "docsInGroup": "1"},
+            "groupSpec": {"groupMode": "GROUP_MODE_FLAT", "groupsOnPage": "10", "docsInGroup": "1"},
         })
         self.assertNotIn(KEY, repr(self.config))
         self.assertTrue(response.closed)

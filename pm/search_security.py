@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 TOPIC_TERMS = {
     "pricing": "цена",
@@ -10,6 +10,13 @@ TOPIC_TERMS = {
     "checkout": "оформление покупки",
     "product_features": "характеристики",
     "support": "поддержка",
+}
+TOPIC_SYNONYMS = {
+    "pricing": ("цена", "стоимость", "купить"),
+    "licensing": ("лицензия", "подписка", "продление"),
+    "checkout": ("оформление заказа", "оплата", "самостоятельная покупка"),
+    "product_features": ("характеристики", "версия", "ассортимент"),
+    "support": ("поддержка", "консультация", "сервис"),
 }
 MAX_INPUT_ITEMS = 50
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.ASCII)
@@ -55,7 +62,7 @@ def product_name(value: str) -> str:
     return value
 
 
-def public_queries(product, domains, topics, allowed_products, allowed_domains):
+def public_queries(product, domains, topics, allowed_products, allowed_domains, aliases=None):
     """Return the public product and ordered (domain, topic, query) tuples."""
     if any(
         type(values) is not list or not 1 <= len(values) <= MAX_INPUT_ITEMS
@@ -68,11 +75,21 @@ def public_queries(product, domains, topics, allowed_products, allowed_domains):
         raise ValueError("invalid_input")
     if any(not isinstance(topic, str) or topic not in TOPIC_TERMS for topic in topics):
         raise ValueError("invalid_input")
-    return product, [
-        (host, topic, f'site:{host} "{product}" {TOPIC_TERMS[topic]}')
-        for host in domains
+    names = (product, *(aliases or {}).get(product, ()))
+    names_clause = _alternatives(names)
+    queries = [
+        (host, topic, f"site:{host} {names_clause} {_alternatives(TOPIC_SYNONYMS[topic])}")
         for topic in dict.fromkeys(topics)
+        for host in domains
     ]
+    if any(len(query) > 400 for _, _, query in queries):
+        raise ValueError("query_too_long")
+    return product, queries
+
+
+def _alternatives(values):
+    quoted = [f'"{value}"' for value in values]
+    return quoted[0] if len(quoted) == 1 else "(" + "|".join(quoted) + ")"
 
 
 def source_url(value: str, expected_domain: str) -> str | None:
@@ -95,3 +112,13 @@ def source_url(value: str, expected_domain: str) -> str | None:
     except ValueError:
         return None
     return urlunsplit((parts.scheme, host, parts.path or "/", parts.query, ""))
+
+
+def canonical_evidence_url(url):
+    parts = urlsplit(url)
+    fields = []
+    for field in parts.query.split("&"):
+        name = unquote(field.partition("=")[0]).casefold()
+        if field and not name.startswith("utm_") and name not in {"yclid", "gclid", "fbclid"}:
+            fields.append(field)
+    return urlunsplit(parts._replace(query="&".join(fields), fragment=""))

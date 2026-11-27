@@ -23,6 +23,25 @@ def _entries(name, normalize):
     return frozenset(normalize(value) for value in values)
 
 
+def _aliases(products):
+    raw = os.getenv("YANDEX_SEARCH_PUBLIC_ALIASES", "{}")
+    if len(raw) > 16_384:
+        raise ValueError("invalid_aliases")
+    data = json.loads(raw)
+    if type(data) is not dict or len(data) > MAX_INPUT_ITEMS:
+        raise ValueError("invalid_aliases")
+    aliases = {}
+    for name, variants in data.items():
+        name = product_name(name)
+        if name not in products or name in aliases or type(variants) is not list or len(variants) > 4:
+            raise ValueError("invalid_aliases")
+        variants = tuple(dict.fromkeys(product_name(value) for value in variants))
+        names = tuple(variant for variant in variants if variant != name)
+
+        aliases[name] = names
+    return aliases
+
+
 def _number(name, default, ceiling, *, minimum=1):
     raw = os.getenv("YANDEX_SEARCH_" + name, str(default))
     if not re.fullmatch(r"[0-9]{1,8}", raw) or not minimum <= int(raw) <= ceiling:
@@ -34,6 +53,7 @@ def _number(name, default, ceiling, *, minimum=1):
 class Config:
     products: frozenset[str]
     domains: frozenset[str]
+    aliases: dict[str, tuple[str, ...]]
     folder: str = field(repr=False)
     api_key: str = field(repr=False)
     max_results: int
@@ -43,9 +63,11 @@ class Config:
 
     @classmethod
     def from_env(cls):
+        products = _entries("YANDEX_SEARCH_PUBLIC_PRODUCTS", product_name)
         return cls(
-            products=_entries("YANDEX_SEARCH_PUBLIC_PRODUCTS", product_name),
+            products=products,
             domains=_entries("YANDEX_SEARCH_ALLOWED_DOMAINS", domain_name),
+            aliases=_aliases(products),
             folder=os.getenv("YANDEX_SEARCH_FOLDER_ID", ""),
             api_key=os.getenv("YANDEX_SEARCH_API_KEY", ""),
             max_results=_number("MAX_RESULTS", 5, 100),
@@ -57,7 +79,7 @@ class Config:
     def validate_credentials(self):
         if not self.api_key or not self.folder:
             return "missing_credentials"
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.folder) or not re.fullmatch(
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", self.folder) or not re.fullmatch(
             r"[A-Za-z0-9_.~-]{1,512}", self.api_key
         ):
             return "invalid_configuration"

@@ -42,7 +42,7 @@ class Store:
         self.path = path.resolve()
         with closing(self._connect()) as db:
             version, = db.execute("PRAGMA user_version").fetchone()
-            if version == 0:
+            if version in {0, 1}:
                 db.executescript("""
                     BEGIN IMMEDIATE;
                     CREATE TABLE IF NOT EXISTS daily (
@@ -55,10 +55,20 @@ class Store:
                         payload TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS cache_fetched ON cache(fetched);
-                    PRAGMA user_version = 1;
+                    CREATE TABLE IF NOT EXISTS page_daily (
+                        day TEXT PRIMARY KEY, attempts INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS page_rate (
+                        host TEXT PRIMARY KEY, scheduled REAL NOT NULL, gap REAL NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS page_cache (
+                        url TEXT PRIMARY KEY, fetched REAL NOT NULL, payload TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS page_cache_fetched ON page_cache(fetched);
+                    PRAGMA user_version = 2;
                     COMMIT;
                 """)
-            elif version != 1:
+            elif version != 2:
                 raise ValueError("unsupported_store_version")
 
     def key_lock(self, key):
@@ -81,15 +91,72 @@ class Store:
                 ))
             return bool(cursor.rowcount)
 
-    def get(self, key, now, ttl):
+    def page_slot(self, now, limit, host, delay):
+        """Reserve a billed-independent crawl request and a shared per-host slot."""
+        timestamp = now.timestamp()
+        day = now.astimezone(UTC).date()
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT scheduled, gap FROM page_rate WHERE host = ?", (host,),
+            ).fetchone()
+            if existing:
+                previous, learned_gap = existing
+                if timestamp - previous < 86400:
+                    delay = max(delay, learned_gap)
+                timestamp = max(timestamp, previous + delay)
+            wait = timestamp - now.timestamp()
+            if delay > 3 or wait > 3:
+                return None, "page_rate_deferred"
+            cursor = db.execute("""
+                INSERT INTO page_daily (day, attempts) VALUES (?, 1)
+                ON CONFLICT(day) DO UPDATE SET attempts = attempts + 1
+                WHERE attempts < ?
+            """, (day.isoformat(), limit))
+            if not cursor.rowcount:
+                return None, "page_daily_limit"
+            db.execute("""
+                INSERT INTO page_rate (host, scheduled, gap) VALUES (?, ?, ?)
+                ON CONFLICT(host) DO UPDATE SET scheduled=excluded.scheduled, gap=excluded.gap
+            """, (host, timestamp, delay))
+            db.execute("DELETE FROM page_daily WHERE day < ?", ((day - timedelta(days=7)).isoformat(),))
+            db.execute("DELETE FROM page_rate WHERE scheduled < ?", (timestamp - 86400,))
+            return wait, None
+
+    def page_get(self, key, now, ttl):
         if not ttl:
             return None
+        timestamp = now.timestamp()
+        with closing(self._connect()) as db:
+            row = db.execute("""
+                SELECT payload FROM page_cache WHERE url = ? AND fetched > ? AND fetched <= ?
+            """, (key, timestamp - ttl, timestamp)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def page_put(self, key, value, now, ttl):
+        if not ttl:
+            return
+        timestamp = now.timestamp()
+        with closing(self._connect()) as db, db:
+            db.execute("DELETE FROM page_cache WHERE fetched <= ?", (timestamp - ttl,))
+            db.execute("""
+                INSERT INTO page_cache (url, fetched, payload) VALUES (?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET fetched=excluded.fetched, payload=excluded.payload
+                WHERE excluded.fetched >= page_cache.fetched
+            """, (key, timestamp, json.dumps(value, ensure_ascii=False)))
+
+    def get(self, key, now, ttl):
+        timestamp = now.timestamp()
         with closing(self._connect()) as db:
             row = db.execute(
-                "SELECT payload FROM cache WHERE key = ? AND fetched > ? AND fetched <= ?",
-                (key, now.timestamp() - ttl, now.timestamp()),
+                "SELECT fetched, payload FROM cache WHERE key = ?", (key,),
             ).fetchone()
-        return _cache_payload(row[0]) if row else None
+        if not row:
+            return None, False
+        fetched, payload = row
+        if not timestamp - ttl < fetched <= timestamp:
+            return None, True
+        return _cache_payload(payload), False
 
     def put(self, key, items, warnings, now, ttl):
         if not ttl:
@@ -107,7 +174,7 @@ class Store:
 
 def cache_key(folder, query, limit):
     # Increment the version when request or normalization semantics change.
-    data = json.dumps([2, folder, query, limit], ensure_ascii=False)
+    data = json.dumps([3, folder, query, limit], ensure_ascii=False)
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
