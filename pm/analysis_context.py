@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import urlsplit
 
@@ -105,7 +105,7 @@ def normalize_web(item, domains, product, topics):
         return entry(item["id"], "competitor_web", title, text,
                      mode="public", quality=item["content_type"], locator=item["url"],
                      observed_at=utc(item.get("published_at")), retrieved_at=utc(item.get("retrieved_at")),
-                     topic=item["topic"])
+                     topic=item["topic"], freshness=freshness(item.get("published_at")))
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
 
@@ -120,6 +120,15 @@ def utc(value):
     except ValueError:
         pass
     return None
+
+
+def freshness(value, today=None):
+    today = today or datetime.now(timezone.utc).date()
+    try:
+        age_days = (today - day(value)).days
+    except (TypeError, ValueError):
+        return "unknown"
+    return "future" if age_days < 0 else "stale" if age_days > 180 else "recent"
 
 
 def web_text(value):
@@ -356,27 +365,44 @@ class InvestigationContext:
             group = locator.get("file", ref) if isinstance(locator, dict) else ref.split(" · ", 1)[0]
             self.add(entry(identifier, kind, ref, item["text"], mode="local" if private else self.mode,
                            locator=locator, quality="excerpt", source_group=f"document:{group}",
-                           observed_at=item.get("observed_at")))
+                           observed_at=item.get("observed_at"), freshness=freshness(item.get("observed_at"))))
+        if hits and competitors and any(row.get("freshness") in {"stale", "unknown", "future"}
+                                          for row in self.evidence.values() if row["kind"] == "competitor_local"):
+            self.limits.append("Для части локальных сведений о конкурентах актуальность не подтверждена.")
         return ("ok", None) if hits else ("missing", "no_relevant_excerpt")
 
     def metrika(self):
         params = self.request["metrika"]
-        if not isinstance(params, dict):
+        if not isinstance(params, dict) or type(params.get("compare", False)) is not bool:
             return "error", "invalid_metric_scope"
-        report = self.meter(params["start"], params["end"], segment=params.get("segment"), detailed=True)
-        for key, metric in report.get("metrics", {}).items():
-            quality = "incomplete" if metric["value"] is None else "sampled" if report.get("sampled") else "observed"
-            self.add(entry(
-                f"metrika:{key}", "metrika", key, mode=report["scope"], unit=metric["unit"],
-                metric=metric["metric"], period=report["period"], filter=report.get("segment"),
-                retrieved_at=report.get("retrieved"), values={"value": metric["value"]},
-                quality=quality, source_group=f"metrika:{report['scope']}",
-            ))
-        if report.get("metrics"):
-            self.limits.append("Счётчик Метрики рассматривается отдельно от заказов. Визиты не подтверждают изменение продаж.")
-        if report.get("missing"):
-            self.limits.append("Для счётчика отсутствует настроенная цель или e-commerce.")
-        return report.get("status", "missing"), report.get("reason")
+        if params.get("compare"):
+            cfg = self.get_snapshot()["config"]
+            windows = [(period + ":", cfg[f"{period}_start"],
+                        (day(cfg[f"{period}_end"]) + WEEK - timedelta(days=1)).isoformat())
+                       for period in ("before", "after")]
+        else:
+            windows = [("", params["start"], params["end"])]
+        statuses = []
+        for prefix, start, end in windows:
+            try:
+                report = self.meter(start, end, segment=params.get("segment"), detailed=True)
+            except (OSError, ValueError):
+                statuses.append(("unavailable", "metric_request_failed"))
+                continue
+            for key, metric in report.get("metrics", {}).items():
+                quality = "incomplete" if metric["value"] is None else "sampled" if report.get("sampled") else "observed"
+                self.add(entry(
+                    f"metrika:{prefix}{key}", "metrika", key, mode=report["scope"], unit=metric["unit"],
+                    metric=metric["metric"], period=report["period"], filter=report.get("segment"),
+                    retrieved_at=report.get("retrieved"), values={"value": metric["value"]},
+                    quality=quality, source_group=f"metrika:{report['scope']}",
+                ))
+            statuses.append((report.get("status", "missing"), report.get("reason")))
+        if any(key.startswith("metrika:") for key in self.evidence):
+            self.limits.append("Визиты и цели Метрики измеряются отдельно от заказов. Совпадение изменений не устанавливает причину.")
+        if len(set(statuses)) > 1:
+            return "partial", "differing_window_status"
+        return statuses[0]
 
     def public(self):
         status, reason, items = public_search(self.request["web"], self.collector)

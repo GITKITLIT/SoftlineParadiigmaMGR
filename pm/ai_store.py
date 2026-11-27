@@ -27,6 +27,8 @@ def database():
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("BEGIN IMMEDIATE")
         version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, 1, 2, 3):
+            raise ValueError("Версия хранилища неизвестна")
         if version == 0:
             db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created TEXT NOT NULL, report TEXT NOT NULL)")
             db.execute("""CREATE TABLE IF NOT EXISTS tasks (
@@ -43,8 +45,14 @@ def database():
             db.execute("""CREATE TABLE IF NOT EXISTS monitor (
                 signature TEXT PRIMARY KEY, status TEXT NOT NULL, changed TEXT NOT NULL, delta REAL)""")
             db.execute("PRAGMA user_version=2")
-        elif version != 2:
-            raise ValueError("Версия хранилища неизвестна")
+        if version < 3:
+            db.execute("""CREATE TABLE IF NOT EXISTS investigation_queue (
+                id TEXT PRIMARY KEY, signature TEXT NOT NULL, created TEXT NOT NULL,
+                status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, lease TEXT,
+                run_id TEXT REFERENCES runs(id)
+            )""")
+            db.execute("CREATE INDEX IF NOT EXISTS queue_status ON investigation_queue(status, created)")
+            db.execute("PRAGMA user_version=3")
         yield db
         db.commit()
     finally:
@@ -195,7 +203,7 @@ def review(request):
         return result
 
 
-def record_check(signature, status, delta):
+def record_check(signature, status, delta, *, enqueue=False):
     with database() as db:
         previous = db.execute("SELECT status FROM monitor WHERE signature=?", (signature,)).fetchone()
         notify = status == "signal" and (previous is None or previous["status"] != "signal")
@@ -204,8 +212,53 @@ def record_check(signature, status, delta):
                       ON CONFLICT(signature) DO UPDATE SET status=excluded.status,
                       changed=excluded.changed, delta=excluded.delta""",
                    (signature, status, created, delta))
+        if notify and enqueue:
+            from uuid import uuid4
+            db.execute("INSERT INTO investigation_queue(id, signature, created, status) VALUES (?, ?, ?, 'pending')",
+                       (uuid4().hex, signature, created))
     return dict(status=status, notification=notify, delta=delta, checked_at=created)
 
+
+
+def claim_investigation(signature, max_daily):
+    from datetime import timedelta
+
+    current = datetime.now(timezone.utc)
+    start = current.date().isoformat()
+    with database() as db:
+        db.execute("""UPDATE investigation_queue SET status='expired'
+                      WHERE status='pending' AND (signature != ? OR created < ?)""",
+                   (signature, start))
+        db.execute("""UPDATE investigation_queue SET status='failed'
+                      WHERE status='running' AND lease <= ?""", (current.isoformat(),))
+        total = db.execute("""SELECT COALESCE(SUM(attempts), 0) FROM investigation_queue
+                              WHERE created >= ?""", (start,)).fetchone()[0]
+        running = db.execute("SELECT 1 FROM investigation_queue WHERE status='running' LIMIT 1").fetchone()
+        if total >= max_daily or running:
+            return None
+        row = db.execute("""SELECT id FROM investigation_queue WHERE signature=?
+                            AND status='pending' ORDER BY created LIMIT 1""", (signature,)).fetchone()
+        if row:
+            lease = (current + timedelta(minutes=5)).isoformat()
+            db.execute("""UPDATE investigation_queue SET status='running', lease=?, attempts=attempts+1
+                          WHERE id=?""", (lease, row["id"]))
+            return row["id"]
+        return None
+
+
+def complete_investigation(notification_id, run_id):
+    with database() as db:
+        db.execute("""UPDATE investigation_queue SET status=?, run_id=?, lease=NULL
+                      WHERE id=? AND status='running'""",
+                   ("ready" if run_id else "failed", run_id, notification_id))
+
+
+def notifications():
+    with database() as db:
+        return [dict(row) for row in db.execute("""
+            SELECT id, created, status, run_id FROM investigation_queue
+            ORDER BY created DESC LIMIT 20
+        """)]
 
 def public_report(run_id):
     report = run(run_id)

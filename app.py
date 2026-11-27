@@ -108,7 +108,7 @@ def api(route, b):
     if route == "/api/analysis/report":
         return ai_store.run(b["run_id"])
     if route == "/api/analysis/journal":
-        return {"runs": ai_store.recent()}
+        return {"runs": ai_store.recent(), "notifications": ai_store.notifications()}
     if route == "/api/tasks":
         return {"tasks": ai_store.task_list()}
     if route == "/api/tasks/decide":

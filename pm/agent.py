@@ -7,6 +7,21 @@ MAX_MODEL_STEPS = 8
 PLAN_SECONDS = 60
 FINISH_PURPOSES = {"enough_evidence", "insufficient_evidence", "out_of_scope"}
 TOOL_PURPOSES = {"measure", "compare", "corroborate", "challenge", "check_duplicate"}
+REQUESTED = {
+    "sales": ("заказ", "продаж", "контрол", "аномали", "индекс"),
+    "funnel": ("воронк", "достижен"),
+    "releases": ("релиз", "выпуск"),
+    "research": ("интервью", "custdev", "исследован", "пользовател"),
+    "competitors": ("конкурент",),
+    "backlog": ("бэклог", "задач", "дубликат"),
+    "metrika": ("метрик", "визит", "посещаемост"),
+    "public_competitors": ("публичн", "интернет"),
+}
+
+
+def requested_tools(query):
+    question = query.casefold()
+    return {tool for tool, stems in REQUESTED.items() if any(stem in question for stem in stems)}
 
 
 def valid_action(action, available):
@@ -29,8 +44,9 @@ def investigate(context, decide=None, *, clock=time.monotonic):
         trace.append(dict(step="tool", tool=name, arguments=arguments, purpose=purpose, actor=actor,
                           seconds=round(clock() - started, 3), **result))
 
+    required = requested_tools(context.query) & context.available.keys()
     if decide:
-        for index in range(MAX_MODEL_STEPS):
+        for _ in range(MAX_MODEL_STEPS):
             if clock() >= end:
                 termination = "planning_timeout"
                 break
@@ -48,7 +64,19 @@ def investigate(context, decide=None, *, clock=time.monotonic):
                 termination = "decision_unavailable"
                 break
             if action["tool"] == "finish":
-                termination = action["purpose"]
+                purpose = action["purpose"]
+                if required - context.completed or (purpose == "out_of_scope" and required):
+                    trace.append(dict(step="decision", actor="qwen", status="premature_stop", seconds=seconds))
+                    # Complete explicitly requested local checks. Unrequested tools are still
+                    # optional. Selected external scopes require a subsequent model choice.
+                    outstanding = [name for name in FALLBACK if name in required - context.completed
+                                   and name not in {"metrika", "public_competitors"}]
+                    if outstanding:
+                        execute(outstanding[0], {}, "requested_coverage", "server")
+                        continue
+                    termination = "decision_unavailable"
+                    break
+                termination = purpose
                 trace.append(dict(step="decision", actor="qwen", status=termination, seconds=seconds))
                 break
             trace.append(dict(step="decision", actor="qwen", status="selected", seconds=seconds))

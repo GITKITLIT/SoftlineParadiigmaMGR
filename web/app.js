@@ -633,6 +633,17 @@ async function reloadRuns() {
     const [journal, backlog] = await Promise.all([api("analysis/journal", {}), api("tasks", {})]);
     const history = $("#runHistory"), tasks = $("#serverTasks");
     history.replaceChildren(node("h4", "Последние расследования"));
+    for (const item of journal.notifications || []) {
+      if (item.status !== "ready") continue;
+      const alert = node("p", "Сигнал мониторинга · " + item.created.slice(0, 10));
+      const link = node("button", "Отчёт по сигналу");
+      link.onclick = async () => {
+        try { renderInvestigation(await api("analysis/report", { run_id: item.run_id })); }
+        catch (error) { flash(error.message); }
+      };
+      alert.append(link);
+      history.append(alert);
+    }
     for (const item of journal.runs) {
       const button = node("button", item.created.replace("T", " ").slice(0, 19) + " UTC · " + item.llm_status);
       button.onclick = async () => {

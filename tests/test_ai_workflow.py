@@ -36,10 +36,7 @@ class InvestigationTests(unittest.TestCase):
                 steps = sum(call["response_format"]["json_schema"]["name"] == "investigation_action" for call in seen)
                 if name == "investigation_action":
                     tool = ("sales", "releases", "finish")[steps - 1]
-                    content = json.dumps({
-                        "tool": tool, "arguments": {},
-                        "purpose": "enough_evidence" if tool == "finish" else "measure",
-                    })
+                    content = json.dumps({"action": "finish_enough" if tool == "finish" else tool})
                 else:
                     content = "broken-json" if len(seen) == steps + 1 else json.dumps({"hypotheses": [{
                     "problem": "Падение индекса заказов", "cause": "Возможна потеря события",

@@ -6,6 +6,7 @@ from uuid import uuid4
 from . import ai_store, qwen
 from .agent import investigate
 from .analysis_context import InvestigationContext
+from .cross_analysis import correlate, strengthen
 
 
 def analyze(request, *, collector=None, meter=None, decide=None, infer=None, persist=True):
@@ -20,14 +21,14 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
     mode, evidence = context.mode, list(context.evidence.values())
     statuses, limits, matches = context.statuses, context.limits, context.matches
     gathered = time.perf_counter() - started
-    findings = []
+    findings = correlate(evidence)
     for item in evidence:
         delta = item.get("values", {}).get("delta")
         if item["kind"] == "orders" and delta is not None:
             findings.append(dict(
                 text=f'{item["ref"]} — изменение среднего индекса {delta:+.1f}%',
                 evidence_ids=[item["id"]], contradictions=[], missing=[],
-                confidence="medium",
+                confidence="medium", statement_type="fact", checks=[],
             ))
         if item["kind"] == "funnel" and item["values"]["rate"] is not None:
             values = item["values"]
@@ -36,13 +37,15 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
                 evidence_ids=[item["id"]], contradictions=[],
                 missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
                 confidence="low" if item["quality"] == "incomplete" else "medium",
+                statement_type="fact", checks=["Сверить покрытие с журналом сбора."],
             ))
     if termination == "out_of_scope":
+        evidence, findings, matches, limits = [], [], [], []
         status, hypotheses, usage, reason = "ok", [], {}, None
     elif infer is not None:
         status, hypotheses, usage, reason = infer(query, evidence)
     else:
-        status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False)
+        status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False, facts=findings)
     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
     core = next((item for item in evidence if item["kind"] == "orders"), None)
     control = next((item for item in evidence if item["id"] == "orders:1"), None)
@@ -62,10 +65,18 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
             missing="Нужны наблюдения по шагам воронки", risk="Изменение состава покупателей",
             evidence_ids=[core["id"]], contradictions=[], confidence="low",
         )]
+    strengthen(hypotheses, evidence)
+    for item in hypotheses:
+        item["alternative_explanations"] = [other["cause"] for other in hypotheses if other is not item] or [
+            "Проверить ошибку измерения, охват релиза и изменение состава аудитории."
+        ]
+        item["business_impact"] = "Проверить влияние на самостоятельные заказы до оценки эффекта."
     effect_plan = dict(
         primary_kpi="orders_index_4w",
         baseline=core["values"]["rolling_base"] if core else None,
-        target=None, guardrails=[],
+        target=None, target_basis="Согласовать цель после проверки разброса индекса в базовом периоде.",
+        baseline_period=core["period"]["before"] if core else None,
+        guardrails=["Контрольный ряд" ] if control else [],
         control_baseline=control["values"]["rolling_base"] if control else None,
         observation_weeks=4,
         stop_condition="Пересмотреть гипотезу при отсутствии улучшения или ухудшении контрольного показателя.",
@@ -74,6 +85,8 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None, per
         dict(id=f"proposal-{i + 1}", title=item["problem"], hypothesis=item["cause"],
              verification=item["verify"], expected=item["expected"], risks=item["risk"],
              segment=core["ref"] if core else "Не выбран", evidence_ids=item["evidence_ids"],
+             criteria=[item["verify"], "Согласовать основную метрику, цель и окно наблюдения перед разработкой."],
+             alternatives=item["alternative_explanations"],
              tag=ai_store.TASK_TAG, priority={
                  "impact": "Проверка потерь заказов" if core else "Уточнение проблемы",
                  "evidence_strength": item["confidence"], "effort": "unknown",
