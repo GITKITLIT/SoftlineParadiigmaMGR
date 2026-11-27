@@ -25,7 +25,7 @@ cp -R "$source_tree/scripts/deploy" scripts/
 cp "$source_tree/scripts/pim_backup.py" scripts/
 git init -q
 git add .
-git -c user.email synthetic@example.invalid -c user.name 'Disposable Core v6 check' commit -qm 'Synthetic tree of pinned components'
+git -c user.email=synthetic@example.invalid -c user.name='Disposable Core v6 check' commit -qm 'Synthetic tree of pinned components'
 sha=$(git rev-parse HEAD)
 release=/opt/paradiigma/releases/$sha
 
