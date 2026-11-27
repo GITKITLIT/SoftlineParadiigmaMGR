@@ -65,7 +65,11 @@ jobs:
       - name: Test isolated Linux backup permissions
         run: sudo python3 -m unittest discover -s tests -p test_deployment_backup.py -v
       - name: Fetch the pinned Core and Search test inputs
-        run: git fetch --no-tags origin b71424d71468ccbdd9a2ceb7c44799fc07abe334 93de5460148982747093bfe50e34dbc57abbb88c
+        run: |
+          git ls-remote --heads origin 'refs/heads/feature/ai-core' 'refs/heads/feature/yandex-search'
+          git fetch --no-tags origin refs/heads/feature/ai-core refs/heads/feature/yandex-search
+          git cat-file -e b71424d71468ccbdd9a2ceb7c44799fc07abe334^{tree}
+          git cat-file -e 93de5460148982747093bfe50e34dbc57abbb88c^{tree}
       - name: Rehearse Core v6, SMTP and restore on disposable state
         run: sudo bash tests/deployment_core_v6.sh --disposable-vm
       - name: Show synthetic service failures
