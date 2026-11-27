@@ -40,8 +40,11 @@ class ReleaseConfiguration(unittest.TestCase):
 
     def test_private_inputs_require_approved_directory(self):
         allowed = self.documents / "input.json"
-        allowed.write_text("{}", encoding="utf8")
+        allowed.write_text("[]", encoding="utf8")
         with patch.dict(os.environ, PARADIIGMA_MODE="private", PM_EVIDENCE=str(allowed)):
             preflight.validate()
             with patch.dict(os.environ, PM_EVIDENCE=str(MODULE)), self.assertRaises(ValueError):
+                preflight.validate()
+            allowed.write_text("invalid JSON", encoding="utf8")
+            with self.assertRaises(ValueError):
                 preflight.validate()

@@ -48,9 +48,46 @@ import sqlite3
 with sqlite3.connect("file:/var/lib/paradiigma/db/ai.sqlite3?mode=ro", uri=True) as db:
     assert db.execute("SELECT count(*) FROM imported_evidence WHERE body LIKE '%Synthetic persisted marker.%'").fetchone()[0] == 1
 PY
-systemctl start paradiigma-backup.service
-snapshot=$(find /var/backups/paradiigma -maxdepth 1 -type d -name 'pim-*' -printf '%T@ %f\n' |
-    sort -nr | awk 'NR == 1 {print $2}')
+# Use the real unit and read-only mount while the application identity owns an active WAL.
+snapshot=$(/usr/bin/python3 - <<'PY'
+from contextlib import closing
+from pathlib import Path
+import select
+import sqlite3
+import subprocess
+
+vault = Path("/var/backups/paradiigma")
+previous = set(vault.glob("pim-*"))
+fixture = """
+import sqlite3
+import sys
+
+with sqlite3.connect("/var/lib/paradiigma/db/ai.sqlite3") as db:
+    assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    db.execute("CREATE TABLE deployment_probe (id INTEGER)")
+    db.execute("INSERT INTO deployment_probe VALUES (1)")
+    db.commit()
+    db.execute("INSERT INTO deployment_probe VALUES (2)")
+    print("ready", flush=True)
+    sys.stdin.read(1)
+    db.rollback()
+"""
+with subprocess.Popen(["runuser", "-u", "pm-app", "--", "/usr/bin/python3", "-c", fixture],
+                      stdin=subprocess.PIPE, stdout=subprocess.PIPE) as writer:
+    try:
+        readable, _, _ = select.select([writer.stdout], [], [], 15)
+        assert readable and writer.stdout.readline().strip() == b"ready"
+        subprocess.run(["systemctl", "start", "paradiigma-backup.service"], check=True, timeout=30)
+        snap, = set(vault.glob("pim-*")) - previous
+        uri = (snap / "ai.sqlite3").as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as copy:
+            assert copy.execute("SELECT id FROM deployment_probe").fetchall() == [(1,)]
+        print(snap.name)
+    finally:
+        writer.stdin.close()
+        writer.wait(timeout=10)
+PY
+)
 test -n "$snapshot"
 vault=/var/backups/paradiigma
 test -f "$vault/$snapshot/ai.sqlite3"

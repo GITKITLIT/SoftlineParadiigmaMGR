@@ -11,6 +11,6 @@ with tempfile.TemporaryDirectory() as state:
     import app
     from pm import ai_store
 
-    app.overview()
+    app.page()
     with ai_store.database() as db:
         print(db.execute("PRAGMA user_version").fetchone()[0])

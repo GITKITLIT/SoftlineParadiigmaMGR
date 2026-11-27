@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from app import page
 from pm import ai_store, collection, monitor, qwen
 from pm.analysis_context import allowed_domain, allowlist
 
@@ -52,6 +53,8 @@ def validate():
     collection.interval()
     monitor.interval()
     monitor.max_daily()
+    # Validate the same inputs used to build the landing page without writing them.
+    page()
     with ai_store.database() as db:
         require(db.execute("SELECT 1").fetchone()[0] == 1, "SQLite")
 
