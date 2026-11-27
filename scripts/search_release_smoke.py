@@ -70,8 +70,19 @@ def run():
         ), patch("pm.yandex_search.pages._request", side_effect=[(404, None, None), (200, None, html)]), patch(
             "pm.yandex_search.pages.time.sleep",
         ):
-            status, _, evidence = analysis_context.public_search(plan)
+            context = analysis_context.InvestigationContext(product, {"web": plan})
+            public = context.run("public_competitors", {})
+            status = public["status"]
+            evidence = [context.evidence[key] for key in public["evidence_ids"]]
             require(status == "ok" and len(evidence) == 2 and provider.call_count == 1, "v1 normalizer")
+            local = context.run("competitors", {})
+            local_items = [context.evidence[key] for key in local["evidence_ids"]]
+            require(
+                local["status"] == "ok" and any(
+                    item["observed_at"] == "2025-03-19" and item["locator"]["cell"] == "A2:K2"
+                    for item in local_items
+                ), "AI Core local research provenance",
+            )
             page, snippet = evidence
             require(page.get("offer", {}).get("currency") == "RUB", "AI Core verified offer")
             require(snippet["quality"] == "snippet" and "offer" not in snippet, "snippet restrictions")
@@ -102,6 +113,13 @@ def run():
             require(any(x["before"] == 1000 and x["after"] == 1120 for x in timeline), "PIM history query")
             require(not history.competitor_changes({"mode": "local", "period": period, "product": product}),
                     "PIM partition")
+            past = analysis_context.InvestigationContext(product, {"memory": {
+                "mode": "synthetic", "competitors": {"product": product, "period": period},
+            }})
+            past_tool = past.run("competitor_history", {})
+            require(past_tool["status"] == "ok" and any(
+                item["kind"] == "historical_competitor" for item in past.evidence.values()
+            ), "historical evidence in AI Core tools")
             packed = pack_competitor_context(report["snapshot"], changes=report["changes"])
             require(packed["changes"] and all(row["evidence_ids"] for row in packed["changes"]), "Qwen history")
             local_model_input = qwen.bounded_evidence(evidence, 3200, 240)
@@ -111,6 +129,8 @@ def run():
                 "pim_inserted": old["created"] + sum(row["created"] for row in parallel),
                 "replayed_insertions": replay["created"], "parallel_pim_replay": "same_ids",
                 "pim_historical_price_changes": len(timeline), "qwen_historical_claims": len(packed["changes"]),
+                "ai_core_local_references": len(local_items),
+                "ai_core_historical_references": len(past_tool["evidence_ids"]),
                 "qwen_handoff_bytes": len(json.dumps(packed, ensure_ascii=False, separators=(",", ":")).encode()),
                 "api_fixture_calls": provider.call_count, "live_requests": 0, "qwen_model_calls": 0,
             }

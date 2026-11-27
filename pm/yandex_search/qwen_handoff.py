@@ -19,12 +19,14 @@ _TYPES = {
 }
 
 
+def _unsafe(value):
+    return isinstance(value, str) and bool(_UNSAFE.search(unescape(value)))
+
+
 def _quote(value):
-    if not isinstance(value, str):
+    if not isinstance(value, str) or _unsafe(value):
         return None
     unescaped = unescape(value)
-    if _UNSAFE.search(unescaped):
-        return None
     return plain_text(unescaped, _MAX_EXCERPT) or None
 
 
@@ -64,6 +66,8 @@ def pack_competitor_context(context, *, changes=None, max_bytes=4500):
     temporal = sorted((changes or {}).get("changes", []),
                       key=lambda row: (not row["material"], row["competitor"], row["feature"]))
     for item in temporal[:3]:
+        if any(_unsafe(value) for value in (item["competitor"], item["before"]["value"], item["after"]["value"])):
+            continue
         relevant = item.get("before_sources", []) + item.get("after_sources", [])
         historical = {record["id"]: record for record in relevant}
         if not historical:
@@ -76,6 +80,11 @@ def pack_competitor_context(context, *, changes=None, max_bytes=4500):
         }, historical)
 
     for item in current["comparisons"]:
+        alternatives = item.get("alternatives", [])
+        if any(_unsafe(value) for value in (
+            item["competitor"], item["own"], item["observed"], *(alt["value"] for alt in alternatives),
+        )):
+            continue
         ids = item["evidence_ids"]
         add("facts", {
             "feature": item["feature"], "competitor": item["competitor"], "state": item["status"],
@@ -83,11 +92,13 @@ def pack_competitor_context(context, *, changes=None, max_bytes=4500):
             "details": {key: item["assessment"][key] for key in (
                 "different_terms", "unknown_terms", "competitor_minus_own", "currency",
             ) if key in item["assessment"]},
-            "alternatives": item.get("alternatives", []), "evidence_ids": ids,
+            "alternatives": alternatives, "evidence_ids": ids,
         }, lookup)
 
     for gap in current["research_needed"][:6]:
-        add("unknowns", gap, lookup)
+        if not _unsafe(gap["competitor"]):
+            add("unknowns", gap, lookup)
     for hypothesis in current["ux_hypotheses"][:2]:
-        add("ux_hypotheses", hypothesis | {"type": "unconfirmed_hypothesis"}, lookup)
+        if not _unsafe(hypothesis["competitor"]):
+            add("ux_hypotheses", hypothesis | {"type": "unconfirmed_hypothesis"}, lookup)
     return output
