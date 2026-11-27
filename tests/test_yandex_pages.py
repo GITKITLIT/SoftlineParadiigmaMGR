@@ -146,6 +146,23 @@ class PageIntegrationTests(unittest.TestCase):
         self.resolve.assert_called_once_with("example.com")
         self.assertEqual(self.request.call_count, 2)
 
+    def test_retry_after_defers_host_across_separate_collections(self):
+        self.request.side_effect = [(404, None, None), (429, None, 600)]
+        first = collect_competitor_evidence(**self.args)
+        self.assertIn("page_access_denied", first["warnings"])
+        second = collect_competitor_evidence(**self.args)
+        self.assertIn("page_rate_deferred", second["warnings"])
+        self.assertEqual(second["page_usage"]["requests"], 0)
+        self.assertEqual(self.request.call_count, 2)
+
+    def test_conflicting_visible_and_structured_prices_are_retained_for_review(self):
+        html = HTML.replace(
+            "</main>", "<p>Продукт: Демо Pro | Цена: 2200 | Валюта: RUB</p></main>",
+        )
+        result = extract_page(html, names=(PRODUCT,), topic="pricing", secret=KEY)
+        self.assertNotIn("price", result["attributes"])
+        self.assertEqual(result["attribute_conflicts"]["price"], ["1050.50", "2200"])
+
     def test_page_budget_covers_robots_and_prevents_second_request(self):
         self.env["YANDEX_SEARCH_PAGE_REQUESTS_PER_RUN"] = "1"
         self.request.return_value = (404, None, None)

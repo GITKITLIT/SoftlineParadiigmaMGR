@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import tempfile
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,6 +13,8 @@ from threading import Thread
 from unittest.mock import patch
 
 from pm.web_search import collect_competitor_evidence
+from pm.yandex_search.client import SearchFailure, request_once
+from pm.yandex_search.config import Config
 from scripts.search_smoke import ROOT
 from test_yandex_search import ENV, KEY, PRODUCT
 
@@ -72,6 +75,42 @@ class TransportIntegrationTests(unittest.TestCase):
         self.assertEqual(body["query"]["queryText"],
                          'site:example.com "Демо Pro" ("лицензия"|"подписка"|"продление")')
         self.assertNotIn(KEY, json.dumps(first))
+
+
+    def test_absolute_deadline_interrupts_trickling_headers(self):
+        class Provider(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                try:
+                    self.wfile.write(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+                    for _ in range(45):
+                        time.sleep(0.02)
+                        self.wfile.write(b"x")
+                    self.wfile.write(b"\r\n\r\n")
+                except OSError:
+                    pass
+
+            def log_message(self, *_):
+                pass
+
+        with patch.dict(os.environ, ENV):
+            config = Config.from_env()
+        with ThreadingHTTPServer(("127.0.0.1", 0), Provider) as server:
+            thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+            thread.start()
+            try:
+                with patch("pm.yandex_search.client._pace_request"), patch(
+                    "pm.yandex_search.client.TIMEOUT_SECONDS", 0.15,
+                ), patch(
+                    "pm.yandex_search.client.http.client.HTTPSConnection",
+                    side_effect=lambda host, timeout: http.client.HTTPConnection(
+                        "127.0.0.1", server.server_port, timeout=timeout,
+                    ),
+                ), self.assertRaisesRegex(SearchFailure, "timeout"):
+                    request_once("query", config)
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
 
 
 class AdditionalParserTests(unittest.TestCase):

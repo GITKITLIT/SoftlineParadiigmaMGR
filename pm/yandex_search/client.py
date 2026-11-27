@@ -3,8 +3,11 @@
 import http.client
 import json
 import random
+import socket
 import ssl
-from time import monotonic
+from contextlib import contextmanager
+from threading import Lock, Timer
+from time import monotonic, sleep
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -13,6 +16,9 @@ _PATH = "/v2/web/search"
 MAX_HTTP_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 5
 _MAX_BACKOFF = 3
+_SEARCH_GAP = 1.05
+_RATE_LOCK = Lock()
+_last_started = None
 
 
 class SearchFailure(Exception):
@@ -60,6 +66,39 @@ def _validate_status(response):
     raise SearchFailure("request_rejected" if status == 400 else "unexpected_http_status")
 
 
+def _pace_request():
+    global _last_started
+    with _RATE_LOCK:
+        current = monotonic()
+        if _last_started is not None:
+            gap = _SEARCH_GAP - (current - _last_started)
+            if gap > 0:
+                sleep(gap)
+        _last_started = monotonic()
+
+
+@contextmanager
+def response_deadline(connection, deadline):
+    """Interrupt trickling headers and body at the deadline, keeping the socket pinned."""
+    sock = connection.sock
+
+    def interrupt():
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    timer = Timer(max(0, deadline - monotonic()), interrupt)
+    timer.daemon = True
+    timer.start()
+    try:
+        with connection.getresponse() as response:
+            yield response
+    finally:
+        timer.cancel()
+
+
 def bounded_body(response, limit, deadline):
     size = response.getheader("Content-Length")
     if size is not None:
@@ -78,6 +117,8 @@ def bounded_body(response, limit, deadline):
         data.extend(block)
     if len(data) > limit:
         raise SearchFailure("response_too_large")
+    if monotonic() >= deadline:
+        raise TimeoutError()
     if size is not None and size != len(data):
         raise SearchFailure("truncated_response", "unavailable", retry=True)
     return bytes(data)
@@ -97,13 +138,14 @@ def request_once(query, config):
         },
     }).encode("utf-8")
     headers = {"Authorization": "Api-Key " + config.api_key, "Content-Type": "application/json"}
+    _pace_request()
     deadline = monotonic() + 2 * TIMEOUT_SECONDS
     try:
         # Direct TLS with the platform trust store. http.client does not follow redirects.
         conn = http.client.HTTPSConnection(_HOST, timeout=TIMEOUT_SECONDS)
         try:
             conn.request("POST", _PATH, body=body, headers=headers)
-            with conn.getresponse() as response:
+            with response_deadline(conn, deadline) as response:
                 _validate_status(response)
                 return bounded_body(response, MAX_HTTP_BYTES, deadline)
         finally:
@@ -113,4 +155,5 @@ def request_once(query, config):
     except ssl.SSLError:
         raise SearchFailure("tls_failed", "unavailable") from None
     except (OSError, http.client.HTTPException):
-        raise SearchFailure("transport_failed", "unavailable", retry=True) from None
+        code = "timeout" if monotonic() >= deadline else "transport_failed"
+        raise SearchFailure(code, "unavailable", retry=True) from None

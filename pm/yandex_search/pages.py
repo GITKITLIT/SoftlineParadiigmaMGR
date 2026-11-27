@@ -3,6 +3,7 @@
 import hashlib
 import http.client
 import ipaddress
+import math
 import sqlite3
 import ssl
 import time
@@ -11,7 +12,7 @@ from collections import defaultdict, deque
 from itertools import islice
 from urllib.parse import unquote, urljoin, urlsplit
 
-from .client import SearchFailure, bounded_body
+from .client import SearchFailure, _retry_after, bounded_body, response_deadline
 from .page_extract import extract_page
 from .page_policy import BOT, Robots, checked_page_url, parse_robots, resolve_public
 from .parsing import utc_stamp
@@ -52,9 +53,10 @@ def _request(url, address, *, robots):
                 "User-Agent": BOT + "/1.0", "Accept-Encoding": "identity",
                 "Accept": "text/plain" if robots else "text/html, application/xhtml+xml",
             })
-            with conn.getresponse() as response:
+            with response_deadline(conn, deadline) as response:
                 if response.status != 200:
-                    return response.status, response.getheader("Location"), None
+                    retry = _retry_after(response.getheader("Retry-After")) if response.status in {429, 503} else None
+                    return response.status, response.getheader("Location"), retry
                 media = response.headers.get_content_type()
                 if (
                     not response.getheader("Content-Type")
@@ -89,6 +91,13 @@ class PageReader:
         self.blocked = set()
         self.usage = {"requests": 0, "cache_hits": 0}
 
+    def _pause(self, host, seconds):
+        try:
+            self.store.page_pause(now_utc(), host, seconds)
+        except _STORAGE_ERRORS:
+            self.blocked.add(host)
+            raise SearchFailure("page_storage_unavailable") from None
+
     def _get(self, url, *, robots=False, gap=1.0):
         host = urlsplit(url).hostname
         if host in self.blocked:
@@ -110,6 +119,8 @@ class PageReader:
         status, location, data = _request(url, address, robots=robots)
         if status in {401, 403, 429, 503}:
             self.blocked.add(host)
+        if status in {429, 503}:
+            self._pause(host, max(60, data or 0))
         return status, location, data
 
     def _policy(self, host):
@@ -117,7 +128,9 @@ class PageReader:
             self.robots[host] = None
             status, _, raw = self._get(f"https://{host}/robots.txt", robots=True)
             if status == 200:
-                self.robots[host] = parse_robots(raw)
+                policy = parse_robots(raw)
+                self._pause(host, policy.delay if math.isfinite(policy.delay) else 86400)
+                self.robots[host] = policy
             elif status in {404, 410}:
                 self.robots[host] = Robots()
         policy = self.robots[host]

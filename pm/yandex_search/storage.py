@@ -38,11 +38,13 @@ def _cache_payload(raw):
 class Store:
     def __init__(self):
         path = private_dir() / "yandex-search.sqlite3"
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = path.resolve()
+        if path.is_symlink() or any((folder / ".git").exists() for folder in self.path.parents):
+            raise ValueError("search_requires_private_directory")
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with closing(self._connect()) as db:
             version, = db.execute("PRAGMA user_version").fetchone()
-            if version in {0, 1}:
+            if version in {0, 1, 2}:
                 db.executescript("""
                     BEGIN IMMEDIATE;
                     CREATE TABLE IF NOT EXISTS daily (
@@ -65,10 +67,13 @@ class Store:
                         url TEXT PRIMARY KEY, fetched REAL NOT NULL, payload TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS page_cache_fetched ON page_cache(fetched);
-                    PRAGMA user_version = 2;
+                    CREATE TABLE IF NOT EXISTS page_pause (
+                        host TEXT PRIMARY KEY, until REAL NOT NULL
+                    );
+                    PRAGMA user_version = 3;
                     COMMIT;
                 """)
-            elif version != 2:
+            elif version != 3:
                 raise ValueError("unsupported_store_version")
 
     def key_lock(self, key):
@@ -97,12 +102,15 @@ class Store:
         day = now.astimezone(UTC).date()
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            pause = db.execute("SELECT until FROM page_pause WHERE host = ?", (host,)).fetchone()
+            if pause:
+                timestamp = max(timestamp, pause[0])
             existing = db.execute(
                 "SELECT scheduled, gap FROM page_rate WHERE host = ?", (host,),
             ).fetchone()
             if existing:
                 previous, learned_gap = existing
-                if timestamp - previous < 86400:
+                if now.timestamp() - previous < 86400:
                     delay = max(delay, learned_gap)
                 timestamp = max(timestamp, previous + delay)
             wait = timestamp - now.timestamp()
@@ -121,7 +129,15 @@ class Store:
             """, (host, timestamp, delay))
             db.execute("DELETE FROM page_daily WHERE day < ?", ((day - timedelta(days=7)).isoformat(),))
             db.execute("DELETE FROM page_rate WHERE scheduled < ?", (timestamp - 86400,))
+            db.execute("DELETE FROM page_pause WHERE until <= ?", (now.timestamp(),))
             return wait, None
+
+    def page_pause(self, now, host, seconds):
+        with closing(self._connect()) as db, db:
+            db.execute("""
+                INSERT INTO page_pause(host, until) VALUES (?, ?)
+                ON CONFLICT(host) DO UPDATE SET until=MAX(excluded.until, page_pause.until)
+            """, (host, now.timestamp() + seconds))
 
     def page_get(self, key, now, ttl):
         if not ttl:

@@ -151,19 +151,24 @@ def parse_robots(raw):
         raise SearchFailure("page_robots_unavailable")
     groups = []
     agents, rules, delays = [], [], []
+    directives = False
     for line in text.splitlines():
         key, sep, value = line.partition("#")[0].partition(":")
         if not sep:
             continue
         key, value = key.strip().lower(), value.strip()
         if key == "user-agent":
-            if rules or delays:
+            if directives:
                 groups.append((agents, rules, delays))
                 agents, rules, delays = [], [], []
+                directives = False
             agents.append(value.lower())
-        elif agents and key in {"allow", "disallow"} and value:
-            rules.append((_rep_path(value), key == "allow"))
+        elif agents and key in {"allow", "disallow"}:
+            directives = True
+            if value:
+                rules.append((_rep_path(value), key == "allow"))
         elif agents and key in {"crawl-delay", "request-rate"}:
+            directives = True
             if key == "crawl-delay" and re.fullmatch(r"[0-9]{1,5}(?:\.[0-9]{1,3})?", value):
                 delays.append(float(value))
             elif key == "request-rate" and re.fullmatch(r"[1-9][0-9]{0,4}/[1-9][0-9]{0,4}", value):

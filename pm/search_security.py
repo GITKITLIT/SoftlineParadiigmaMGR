@@ -82,7 +82,7 @@ def public_queries(product, domains, topics, allowed_products, allowed_domains, 
         for topic in dict.fromkeys(topics)
         for host in domains
     ]
-    if any(len(query) > 400 for _, _, query in queries):
+    if any(len(query) > 400 or len(re.findall(r"\w+", query)) > 40 for _, _, query in queries):
         raise ValueError("query_too_long")
     return product, queries
 
@@ -93,7 +93,7 @@ def _alternatives(values):
 
 
 def source_url(value: str, expected_domain: str) -> str | None:
-    if not value or len(value) > 2048 or any(
+    if not isinstance(value, str) or not value or len(value) > 2048 or any(
         char in '\\<>"{}|^`' or char.isspace() or unicodedata.category(char).startswith("C")
         for char in value
     ):

@@ -16,7 +16,7 @@ from unittest.mock import patch
 from pm.search_security import domain_name, source_url
 from pm.web_search import _collect, collect_competitor_evidence
 from pm.yandex_search.client import (
-    MAX_HTTP_BYTES, SearchFailure, request_once, retry_delay,
+    MAX_HTTP_BYTES, SearchFailure, bounded_body, request_once, retry_delay,
 )
 from pm.yandex_search.config import Config
 from pm.yandex_search.parsing import MAX_XML_BYTES
@@ -156,6 +156,13 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.call()["reason"], "invalid_configuration")
         self.assertEqual(self.request.call_count, 2)
 
+    def test_query_word_limit_is_checked_before_network(self):
+        self.env["YANDEX_SEARCH_PUBLIC_ALIASES"] = json.dumps({
+            PRODUCT: [" ".join([word] * 10) for word in ("a", "b", "c", "d")],
+        })
+        self.assertEqual(self.call()["reason"], "invalid_input")
+        self.request.assert_not_called()
+
     def test_rank_product_listing_and_remove_tracking_duplicates(self):
         self.env["YANDEX_SEARCH_MAX_RESULTS"] = "1"
         low = DOC.replace("Демо <hlword>Pro</hlword>", "Прочие товары").replace("/product", "/blog")
@@ -235,14 +242,15 @@ class SearchTests(unittest.TestCase):
                 self.assertNotIn(KEY, json.dumps(result))
                 self.assertEqual(result["usage"]["requests"], 1)
 
-    def test_retry_and_partial_run_budget(self):
+    def test_transient_error_cannot_starve_remaining_check(self):
         self.env["YANDEX_SEARCH_MAX_QUERIES_PER_RUN"] = "2"
         self.request.side_effect = [SearchFailure("timeout", "unavailable", retry=True), reply(DOC)]
         result = self.call(topics=["licensing", "pricing", "support"])
-        self.assertEqual((result["status"], result["reason"]), ("partial", "run_limit"))
-        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual((result["status"], result["reason"]), ("partial", "timeout"))
+        self.assertEqual(result["items"][0]["topic"], "pricing")
+        self.assertEqual(result["coverage"][-1]["reason"], "run_limit")
         self.assertEqual(result["usage"]["requests"], 2)
-        self.sleep.assert_called_once()
+        self.sleep.assert_not_called()
 
     def test_one_bad_topic_leaves_other_results(self):
         self.request.side_effect = [xml_error(18), reply(DOC)]
@@ -295,6 +303,11 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["usage"]["requests"], 0)
         self.request.assert_called_once()
 
+    def test_private_database_cannot_be_placed_in_git(self):
+        self.env["PM_PRIVATE_DIR"] = str(Path(__file__).resolve().parents[1])
+        self.assertEqual(self.call()["reason"], "storage_unavailable")
+        self.request.assert_not_called()
+
     def test_unusable_storage_fails_closed(self):
         (self.directory / "yandex-search.sqlite3").mkdir()
         self.assertEqual(self.call()["reason"], "storage_unavailable")
@@ -317,6 +330,7 @@ class ClientTests(unittest.TestCase):
     def setUp(self):
         with patch.dict(os.environ, ENV):
             self.config = Config.from_env()
+        self.enterContext(patch("pm.yandex_search.client._pace_request"))
         self.connection = self.enterContext(patch("pm.yandex_search.client.http.client.HTTPSConnection"))
         self.conn = self.connection.return_value
 
@@ -362,6 +376,16 @@ class ClientTests(unittest.TestCase):
             if retry:
                 self.assertGreaterEqual(retry_delay(cm.exception, 0), 2)
             self.assertTrue(response.closed)
+
+    def test_body_rejects_truncation_and_checks_deadline(self):
+        response = self.response(200, b"123")
+        response.getheader = lambda name: "7"
+        with patch("pm.yandex_search.client.monotonic", return_value=0):
+            with self.assertRaisesRegex(SearchFailure, "truncated_response"):
+                bounded_body(response, 10, 2)
+        with patch("pm.yandex_search.client.monotonic", return_value=5):
+            with self.assertRaises(TimeoutError):
+                bounded_body(response, 10, 2)
 
     def test_timeout_and_tls_without_secret_details(self):
         for exception, reason in ((TimeoutError(KEY), "timeout"), (ssl.SSLError(KEY), "tls_failed")):

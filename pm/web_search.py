@@ -28,7 +28,7 @@ def _envelope():
     }
 
 
-def _search(store, config, result, *, domain, topic, query, product, smoke):
+def _search(store, config, result, *, domain, topic, query, product, smoke, remaining):
     usage = result["usage"]
     for attempt in range(1 if smoke else _MAX_ATTEMPTS):
         if usage["requests"] >= config.max_queries:
@@ -41,7 +41,7 @@ def _search(store, config, result, *, domain, topic, query, product, smoke):
             raise SearchFailure("daily_limit", "unavailable")
         usage["requests"] += 1
         started = time.perf_counter()
-        attempt_info = {"domain": domain, "topic": topic}
+        attempt_info = {"domain": domain, "topic": topic, "started_at": utc_stamp(now_utc())}
         result["attempts"].append(attempt_info)
         try:
             payload = request_once(query, config)
@@ -55,7 +55,7 @@ def _search(store, config, result, *, domain, topic, query, product, smoke):
             return items, warnings, fetched
         except SearchFailure as failure:
             attempt_info["outcome"] = failure.reason
-            has_budget = usage["requests"] < config.max_queries
+            has_budget = usage["requests"] + remaining < config.max_queries
             if smoke or not failure.retry or not has_budget or attempt + 1 == _MAX_ATTEMPTS:
                 raise
             delay = retry_delay(failure, attempt)
@@ -66,7 +66,7 @@ def _search(store, config, result, *, domain, topic, query, product, smoke):
         time.sleep(delay)
 
 
-def _resolve_query(store, config, result, product, query_info, stop_live, smoke):
+def _resolve_query(store, config, result, product, query_info, stop_live, smoke, remaining):
     domain, topic, query = query_info
     use_cache = not smoke and config.ttl > 0
     key = cache_key(config.folder, query, config.max_results)
@@ -84,7 +84,7 @@ def _resolve_query(store, config, result, product, query_info, stop_live, smoke)
             raise stop_live
         items, notes, fetched = _search(
             store, config, result, domain=domain, topic=topic, query=query,
-            product=product, smoke=smoke,
+            product=product, smoke=smoke, remaining=remaining,
         )
         if use_cache:
             try:
@@ -127,12 +127,16 @@ def _run(result, *, product, domains, topics, smoke):
     coverage = result["coverage"]
     successes = 0
     stop_live = None
-    for query_info in queries[:config.max_queries]:
+    scheduled = queries[:config.max_queries]
+    for index, query_info in enumerate(scheduled):
         domain, topic, query = query_info
         check = {"domain": domain, "topic": topic, "count": 0}
         coverage.append(check)
         try:
-            items, notes = _resolve_query(store, config, result, product, query_info, stop_live, smoke)
+            items, notes = _resolve_query(
+                store, config, result, product, query_info, stop_live, smoke,
+                remaining=len(scheduled) - index - 1,
+            )
         except SearchFailure as failure:
             failures.append(failure)
             check.update(status=failure.status, reason=failure.reason)
