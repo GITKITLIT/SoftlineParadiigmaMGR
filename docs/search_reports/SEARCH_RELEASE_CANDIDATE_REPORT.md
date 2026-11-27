@@ -1,5 +1,7 @@
 # Search Release Candidate
 
+Этот документ сохраняет результаты предыдущей приёмки. Актуальная ревизия, повторная проверка AI Core и Qwen Engine и пакетный импорт PIM описаны в [итоговом отчёте](../../SEARCH_RELEASE_CANDIDATE_REPORT.md).
+
 Финальная приёмка 27.11.2026 МСК. Репозиторий `GITKITLIT/SoftlineParadiigmaMGR`, ветка `feature/yandex-search`. Итоговый SHA принимаемой сборки `be1e8b421338df992c44316e1e7385b574dd2840`. Именно этот SHA и чистую рабочую копию сверили с GitHub перед обновлением документа. Ревизия опубликованной AI Core по-прежнему `f8b93b1508fdc2b3242976187c6966583a8fa03f`. После принимаемой сборки меняется только этот отчёт. SHA публикации отчёта можно получить командой `git log -1 --format=%H origin/feature/yandex-search -- docs/search_reports/SEARCH_RELEASE_CANDIDATE_REPORT.md`.
 
 ## Готовность и результаты
