@@ -47,7 +47,22 @@
                      {"id": str(key), "title": str(row.get("title") or "")[:180], "status": row.get("status")}
 --- a/pm/analysis_context.py
 +++ b/pm/analysis_context.py
-@@ -388,12 +388,24 @@
+@@ -289,6 +289,14 @@
+                 "reason": "no_public_scope" if not request.get("web") else "configuration_disabled",
+             }
+
++        if self.memory_scope.get("only_history") is True:
++            for tool, key in (("sales", "sales"), ("funnel", "funnel"), ("releases", "release"),
++                              ("backlog", "backlog"), ("research", "research"),
++                              ("competitors", "competitor_local"), ("metrika", "metrika"),
++                              ("public_competitors", "competitor_web")):
++                if self.available.pop(tool, None):
++                    self.statuses[key] = {"status": "disabled", "reason": "historical_chat_scope"}
++
+     def get_snapshot(self):
+         if self.snapshot is None:
+             self.snapshot = recalculate(self.load_snapshot(), self.request.get("config", {}), allow_partial=True)
+@@ -388,12 +396,24 @@
              partial = rate is None or values.get("days") != values.get("total")
              incomplete |= partial
              self.add(entry(
@@ -73,7 +88,7 @@
          return ("missing", "no_segments") if not reach else ("partial", "incomplete_coverage") if incomplete else ("ok", None)
 
      def releases(self):
-@@ -402,7 +414,7 @@
+@@ -402,7 +422,7 @@
          launch = snapshot.get("launch")
          if launch:
              self.add(entry("release:current", "release", current or "Релиз",
@@ -82,7 +97,7 @@
                             values={"related_task": snapshot.get("release_task")}))
          cfg = snapshot["config"]
          begin, end = day(cfg["before_start"]), day(cfg["after_end"])
-@@ -442,6 +454,18 @@
+@@ -442,6 +462,18 @@
                                 mode=self.mode, values={"status": row.get("status")}, source_group="backlog"))
              if len(self.matches) >= 4:
                  break
@@ -101,6 +116,33 @@
          return ("ok", None) if self.matches else ("missing", "no_matching_task")
 
      def research(self, competitors):
+@@ -575,6 +607,7 @@
+             self.add(entry(f"memory:decision:{index}", "memory_context", "Предыдущее решение",
+                            item.get("proposal") or item.get("summary") or "", mode=self.mode,
+                            quality="historical_context", locator={"run_id": item["run_id"]},
++                           observed_at=item["created"][:10],
+                            values={"decision": item["decision"], "reason": item["decision_reason"],
+                                    "effect": item["effect"]}))
+         return ("ok", None) if result["documents"] or result["decisions"] else ("missing", "no_related_history")
+@@ -586,7 +619,8 @@
+         for row in rows[:5]:
+             self.add(entry(f"memory:offer:{row['observation_id']}", "historical_competitor", row["competitor"],
+                            mode=self.mode, quality=row["quality"], locator=row["reference"],
+-                           observed_at=row["published"], unit=row["currency"],
++                           observed_at=row["observed"], published_at=row["published"],
++                           unit=row["currency"], terms=row["terms"],
+                            source_group=f"public:{row['competitor']}", values={"before": row["before"], "after": row["after"]},
+                            memory_observation_id=row["observation_id"]))
+         return ("ok", None) if rows else ("missing", "no_comparable_price_changes")
+@@ -601,5 +635,7 @@
+             self.add(entry(f"memory:release:{row['observation_id']}", "historical_release", row["id"],
+                            mode=self.mode, observed_at=row["date"], quality="observed",
+                            source_group="release_log", memory_observation_id=row["observation_id"],
+-                           values={"delta": numbers.get("delta"), "interpretation": "descriptive_only"}))
++                           unit=numbers.get("unit"),
++                           values={"before": numbers.get("before"), "after": numbers.get("after"),
++                                   "delta": numbers.get("delta"), "interpretation": "descriptive_only"}))
+         return ("ok", None) if result["releases"] else ("missing", "no_historical_releases")
 --- a/pm/investigation.py
 +++ b/pm/investigation.py
 @@ -37,6 +37,15 @@
@@ -141,16 +183,20 @@
      if termination == "out_of_scope":
          evidence, findings, matches, limits = [], [], [], []
          core, control = None, None
-@@ -77,6 +92,8 @@
+@@ -77,6 +92,12 @@
          status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
      elif skip_synthesis:
          status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
 +    elif compare_offers:
 +        status, hypotheses, usage, reason = "not_needed", [], {}, "competitor_measurement"
++    elif context.memory_scope.get("only_history") is True and not any(
++        keyword in query.casefold() for keyword in ("почему сниз", "почему вырос", "новую гипотез", "как проверить")
++    ):
++        status, hypotheses, usage, reason = "not_needed", [], {}, "historical_lookup"
      elif comparison and not any(word in query.casefold() for word in ("почему", "гипотез", "как проверить")):
          status, hypotheses, usage, reason = "not_needed", [], {}, "historical_measurement"
      elif infer is not None:
-@@ -162,10 +179,16 @@
+@@ -162,10 +183,16 @@
          hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
      )]
      elapsed = time.perf_counter() - started
@@ -168,3 +214,57 @@
          backlog_matches=matches, proposed_tasks=proposals, effect_plan=effect_plan, limitations=limits,
          trace=[dict(step="collect", seconds=round(gathered, 3)),
                 *trace,
+--- a/pm/agent.py
++++ b/pm/agent.py
+@@ -61,6 +61,11 @@
+                           seconds=round(clock() - started, 3), **result))
+
+     required = requested_tools(context.query) & context.available.keys()
++    scope = getattr(context, "memory_scope", None)
++    if isinstance(scope, dict) and scope.get("only_history") is True:
++        tools = {"compare": "compare_history", "search": "search_history",
++                 "competitors": "competitor_history", "product": "product_history"}
++        required |= {tools[key] for key in tools.keys() & scope.keys()} & context.available.keys()
+     if decide:
+         for _ in range(MAX_MODEL_STEPS):
+             if clock() >= end:
+--- a/pm/history.py
++++ b/pm/history.py
+@@ -191,7 +191,7 @@
+         and item.get("quality") not in {"reported", "derived", "incomplete", "snippet"}}
+
+
+-def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=False):
++def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=False, product=None):
+     require_mode(mode)
+     words = query.casefold().split()[:8]
+     with ai_store.database() as db:
+@@ -207,6 +207,10 @@
+         for row in rows:
+             report = json.loads(row["report"])
+             task = json.loads(row["body"]) if row["body"] else {}
++            primary = next((item.get("ref") for item in report.get("evidence", [])
++                            if item.get("id") == "orders:0"), None)
++            if product and product not in (primary, task.get("segment")):
++                continue
+             context = report.get("request_context", {}).get("query", "")
+             text = " ".join([context, report.get("summary", ""), task.get("title", ""), task.get("hypothesis", "")])
+             if words and not any(word in text.casefold() for word in words):
+@@ -245,7 +249,7 @@
+     with ai_store.database() as db:
+         documents = (memory.find_fragments(db, query, product=product, kind=request.get("kind"),
+                                            start=start, end=end) if mode == "local" else [])
+-    return {"documents": documents, "decisions": past_decisions(mode, query, start=start, end=end)}
++    return {"documents": documents, "decisions": past_decisions(mode, query, start=start, end=end, product=product)}
+
+
+ def backup_status():
+@@ -303,7 +307,7 @@
+                     facts["comparison"] = {
+                         "before": first, "after": last,
+                         "delta": last["value"] - first["value"] if first["status"] == last["status"] == "ok" else None,
+-                        "interpretation": "descriptive_only",
++                        "unit": series["unit"], "interpretation": "descriptive_only",
+                     }
+                 result.append(facts)
+     return {"product": name, "releases": sorted(result, key=lambda item: item["date"], reverse=True)[:25]}

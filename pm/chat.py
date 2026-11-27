@@ -19,10 +19,22 @@ FOLLOW_UP = re.compile(
 COUNTEREVIDENCE = re.compile(r"противореч", re.I)
 SUPPORT = re.compile(r"доказательств|подтвержд", re.I)
 HISTORICAL_WINDOWS = re.compile(r"год назад|прошл\w+ год|\bквартал\w*\b|\b20\d\d\b.+\b20\d\d\b", re.I)
+MEMORY_LOOKUP = re.compile(
+    r"похож\w*\s+(?:проблем|аномал|расследован)|повторяющ\w*\s+(?:пользовательск\w*\s+)?проблем|"
+    r"(?:проверенн|отклон[её]нн)\w*\s+гипотез|"
+    r"(?:принял|отклонил)\w*.+(?:стар|предыдущ)\w*\s+задач|"
+    r"(?:эффект|результат)\w*.+(?:стар|предыдущ)\w*\s+рекомендац",
+    re.I,
+)
+MEMORY_TOOLS = {
+    "compare": "compare_history", "search": "search_history",
+    "competitors": "competitor_history", "product": "product_history",
+}
 MEASUREMENT_FOCUS = {
     "compare_history": {"historical_metric", "historical_comparison"},
-    "product_history": {"release", "historical_metric", "historical_comparison"},
+    "product_history": {"historical_release"},
     "search_history": {"historical_document", "memory_context"},
+    "competitor_history": {"historical_competitor"},
     "competitors": {"competitor_local", "competitor_web", "historical_competitor"},
     "public_competitors": {"competitor_web"},
     "backlog": {"backlog"},
@@ -60,6 +72,12 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     prior = previous if follow_up else None
     effective_scope = ((prior or {}).get("scope", {}) | scope)
     effective_scope = {key: value for key, value in effective_scope.items() if value is not None}
+    memory = effective_scope.get("memory", {})
+    if MEMORY_LOOKUP.search(question) and not effective_scope.get("task_id") and not (memory.keys() & MEMORY_TOOLS.keys()):
+        memory = memory | {"search": {}}
+    historical = memory.keys() & MEMORY_TOOLS.keys()
+    if historical:
+        effective_scope["memory"] = memory | {"only_history": True}
     query = question
     hypothesis = None
     old_report = (prior or {}).get("report") or {}
@@ -75,7 +93,6 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
             context += "\nПредыдущая гипотеза для проверки: " + hypothesis["cause"][:100]
         if MAX_QUESTION - len(question) > 32:
             query = (query + context)[:MAX_QUESTION]
-    memory = effective_scope.get("memory", {})
     turn = {
         "question": question,
         "scope": effective_scope,
@@ -83,12 +100,12 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     }
     if not prior and follow_up and not scope:
         return turn | {"report": None, "reply": {"answer": "Уточните, к какому вопросу или гипотезе вы возвращаетесь."}}
-    if HISTORICAL_WINDOWS.search(question) and not (memory.get("compare") or memory.get("product") or memory.get("competitors")):
+    if HISTORICAL_WINDOWS.search(question) and not historical:
         return turn | {"report": None, "reply": {
             "answer": "Укажите исторический ряд и два периода для сравнения.",
             "needs": "historical_windows",
         }}
-    if "effect" in requested_tools(question) and not effective_scope.get("task_id"):
+    if "effect" in requested_tools(question) and not effective_scope.get("task_id") and not historical:
         return turn | {"report": None, "reply": {
             "answer": "Выберите согласованную задачу, эффект которой нужно оценить.",
             "needs": "accepted_task",
@@ -96,9 +113,10 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     report = analyze({"query": query, **effective_scope}, persist=False, progress=progress)
     asked = requested_tools(question)
     focus = set()
-    if memory.get("compare"):
-        focus |= MEASUREMENT_FOCUS["compare_history"]
-    if not re.search(r"почему|гипотез|провер|что делать|после релиз", question, re.I):
+    if historical:
+        for name in historical:
+            focus |= MEASUREMENT_FOCUS[MEMORY_TOOLS[name]]
+    elif not re.search(r"почему|гипотез|провер|что делать|после релиз", question, re.I):
         if asked & {"compare_history", "search_history", "effect", "competitors", "backlog", "research", "funnel"}:
             asked = asked - {"sales", "releases"}
         for tool in asked:

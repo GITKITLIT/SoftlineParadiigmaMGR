@@ -14,6 +14,8 @@ EFFECT_LABELS = {
     "stop_condition_met": "Достигнут согласованный порог остановки",
 }
 HIDDEN_PHASES = {"collect", "qwen"}
+HISTORICAL = {"historical_metric", "historical_comparison", "historical_release",
+              "historical_competitor", "historical_document", "memory_context"}
 
 
 def release_brief(run_id, *, read_run=ai_store.run):
@@ -26,6 +28,7 @@ def report_view(report, *, focus=None):
     hypotheses = report["hypotheses"]
     selected = [item for item in evidence if item["kind"] in {
         "orders", "funnel", "historical_metric", "historical_comparison", "effect",
+        "historical_release", "historical_competitor", "memory_context",
     }]
     if focus:
         selected = [item for item in selected if item["kind"] in focus]
@@ -36,7 +39,7 @@ def report_view(report, *, focus=None):
             measurements.insert(0, measurements.pop(index))
     observations = [item for item in evidence if item["kind"] in {
         "research", "interview", "competitor_local", "competitor_web", "backlog", "release",
-        "historical_document", "historical_competitor", "memory_context",
+        "historical_document",
     } and (not focus or item["kind"] in focus)]
     offer_check = offer_comparison(evidence)
     market_focus = focus and "competitor_web" in focus
@@ -55,6 +58,8 @@ def report_view(report, *, focus=None):
         conclusion = f"{first['ref']} · {first['text'][:150]}" if focus and first.get("text") else (
             f"Доступные наблюдения по вопросу: {len(observations)}."
         )
+    elif focus and focus <= HISTORICAL:
+        conclusion = "В выбранной области продуктовой памяти подходящих наблюдений нет."
     else:
         conclusion = "По выбранным источникам данных для ответа недостаточно."
     measurement_gap = any(row.get("relation") == "cart_measurement_gap" for row in report["findings"])
@@ -111,6 +116,23 @@ def measurement(item):
         delta = values["delta_percent"]
         text = (f"{item['ref']}: изменение между историческими окнами {delta:+.1f}%."
                 if delta is not None else f"{item['ref']}: относительное изменение недоступно.")
+    elif kind == "historical_release":
+        delta = values["delta"]
+        text = f"Релиз {item['ref']} · {item['observed_at']}"
+        if delta is None:
+            text += ". Замер по полным окнам недоступен."
+        else:
+            text += f" · изменение {delta:+g} {item['unit'] or ''}. Сравнение описательное."
+    elif kind == "historical_competitor":
+        date = item.get("observed_at") or ""
+        text = f"{item['ref']} · {values['before']:g} → {values['after']:g} {item['unit']} {date}".strip()
+    elif kind == "memory_context":
+        decision = {"accept": "Согласовано", "reject": "Отклонено"}.get(values.get("decision"), "Исследовано")
+        text = f"{decision} · {item['text']}"
+        if values.get("reason"):
+            text += f" · {values['reason']}"
+        if values.get("effect") in EFFECT_LABELS:
+            text += f" · {EFFECT_LABELS[values['effect']]}"
     else:
         text = EFFECT_LABELS.get(values["status"], "Статус оценки недоступен") + "."
     return {"evidence_id": item["id"], "text": text}

@@ -175,6 +175,10 @@
     row.append(element("strong", item.ref));
     const origin = [item.id, item.quality, item.data_mode, item.observed_at, item.freshness].filter(Boolean);
     row.append(element("p", origin.join(" · ")));
+    if (item.kind === "historical_competitor") {
+      if (item.terms) row.append(element("p", "Условия · " + item.terms));
+      row.append(element("p", item.published_at ? "Опубликовано · " + item.published_at : "Дата публикации неизвестна"));
+    }
     if (item.text) row.append(element("p", item.text));
     if (item.values) row.append(element("p", Object.entries(item.values).map(([key, value]) =>
       key + " · " + (value == null ? "нет данных" : JSON.stringify(value))).join(" / ")));
@@ -370,8 +374,10 @@
     open();
   };
 
-  const historyButton = find("#memoryChat");
-  if (historyButton) historyButton.hidden = false;
+  for (const id of ["memoryChat", "memorySearchChat", "memoryReleaseChat", "memoryPriceChat"]) {
+    const button = find("#" + id);
+    if (button) button.hidden = false;
+  }
   let lastReleaseRun = null;
   const release = find("#qwen-release");
   function renderRelease(view) {
