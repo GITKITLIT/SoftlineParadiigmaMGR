@@ -1,7 +1,7 @@
 name: Deployment acceptance
 on:
   push:
-    branches: [feature/integration]
+    branches: [feature/integration, 'release/**']
   pull_request:
     paths:
       - 'deploy/**'
