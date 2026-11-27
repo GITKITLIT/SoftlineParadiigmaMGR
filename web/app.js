@@ -505,6 +505,20 @@ function renderInvestigation(report) {
   for (const [name, value] of Object.entries(report.sources_status)) {
     sourceBlock.append(node("p", (labels[name] || name) + " · " + (status[value.status] || value.status)));
   }
+  const steps = (report.trace || []).filter((item) => item.step === "tool");
+  if (steps.length) {
+    const history = section("Действия агента");
+    const tools = { sales: "Продажи и контроль", funnel: "Воронка", metrika: "Метрика",
+      releases: "Релизы", research: "Исследования", competitors: "Конкуренты",
+      backlog: "Бэклог", public_competitors: "Публичные источники" };
+    for (const step of steps) {
+      history.append(evidenceLinks(
+        (tools[step.tool] || step.tool) + " · " + (status[step.status] || step.status) +
+        (step.actor === "qwen" ? " · выбор Qwen" : " · автоматический сбор"),
+        step.evidence_ids,
+      ));
+    }
+  }
   const findings = section("Наблюдения");
   for (const item of report.findings) findings.append(evidenceLinks(item.text, item.evidence_ids));
   const hypotheses = section(report.llm_status === "ok" ? "Гипотезы Qwen" : "Гипотезы по правилам");

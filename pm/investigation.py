@@ -4,24 +4,21 @@ import time
 from uuid import uuid4
 
 from . import ai_store, qwen
-from .analysis_context import collect
-from .service import overview, recalculate
+from .agent import investigate
+from .analysis_context import InvestigationContext
 
 
-def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
+def analyze(request, *, collector=None, meter=None, decide=None, infer=None, persist=True):
     started = time.perf_counter()
     query = request.get("query", "")
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
-    snapshot = recalculate(overview(for_analysis=True), config, allow_partial=True)
-    partial_sales = any(
-        item["before"] is None or item["after"] is None for item in snapshot["series"]
-    )
-    mode, evidence, statuses, limits, matches = collect(query, snapshot, request, collector=collector)
-    if partial_sales:
-        statuses["sales"] = {"status": "partial", "reason": "missing_weeks"}
-        limits.append("В запрошенных периодах есть пропуски. Показатели с пропусками исключены из сравнения.")
+    context = InvestigationContext(query, request, collector=collector, meter=meter)
+    planner = decide if decide is not None else qwen.planner() if infer is None else None
+    trace, planning_usage, termination = investigate(context, planner)
+    mode, evidence = context.mode, list(context.evidence.values())
+    statuses, limits, matches = context.statuses, context.limits, context.matches
     gathered = time.perf_counter() - started
     findings = []
     for item in evidence:
@@ -40,12 +37,20 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
                 missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
                 confidence="low" if item["quality"] == "incomplete" else "medium",
             ))
-    status, hypotheses, usage, reason = infer(query, evidence)
+    if termination == "out_of_scope":
+        status, hypotheses, usage, reason = "ok", [], {}, None
+    elif infer is not None:
+        status, hypotheses, usage, reason = infer(query, evidence)
+    else:
+        status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False)
+    usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
     core = next((item for item in evidence if item["kind"] == "orders"), None)
     control = next((item for item in evidence if item["id"] == "orders:1"), None)
-    if core is None or core["values"]["delta"] is None:
+    if termination == "out_of_scope":
+        summary = "Вопрос за пределами продуктовой аналитики."
+    elif core is None or core["values"]["delta"] is None:
         summary = "Недостаточно недель для сравнения основного показателя."
-    elif core["values"]["delta"] <= -snapshot["config"]["alert_percent"] and core["values"]["delta"] < 0:
+    elif core["values"]["delta"] <= -core["values"]["alert_percent"] and core["values"]["delta"] < 0:
         summary = "Снижение среднего индекса достигло порога. Причина требует проверки."
     else:
         summary = "Снижение среднего индекса не достигло заданного порога."
@@ -83,10 +88,11 @@ def analyze(request, *, collector=None, infer=qwen.infer, persist=True):
         recommended_actions=[h["verify"] for h in hypotheses] or ["Проверить полноту входных данных."],
         backlog_matches=matches, proposed_tasks=proposals, effect_plan=effect_plan, limitations=limits,
         trace=[dict(step="collect", seconds=round(gathered, 3)),
+               *trace,
                dict(step="qwen", seconds=round(elapsed - gathered, 3), status=status,
                     reason=reason if status != "ok" else None,
                     selected_step=reason if status == "ok" else None)],
-        usage=usage, seconds=round(elapsed, 3), checks=["checkout", "tracking"],
+        usage=usage, termination=termination, seconds=round(elapsed, 3), checks=["checkout", "tracking"],
         hits=[item for item in evidence if item["kind"] in
               {"research", "interview", "competitor_local", "competitor_web"}],
         mode="Локальная Qwen" if status == "ok" else "Расчёт и поиск",

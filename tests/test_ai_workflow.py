@@ -32,13 +32,22 @@ class InvestigationTests(unittest.TestCase):
             def do_POST(self):
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 seen.append(request)
-                content = "broken-json" if len(seen) == 1 else json.dumps({"hypotheses": [{
+                name = request["response_format"]["json_schema"]["name"]
+                steps = sum(call["response_format"]["json_schema"]["name"] == "investigation_action" for call in seen)
+                if name == "investigation_action":
+                    tool = ("sales", "releases", "finish")[steps - 1]
+                    content = json.dumps({
+                        "tool": tool, "arguments": {},
+                        "purpose": "enough_evidence" if tool == "finish" else "measure",
+                    })
+                else:
+                    content = "broken-json" if len(seen) == steps + 1 else json.dumps({"hypotheses": [{
                     "problem": "Падение индекса заказов", "cause": "Возможна потеря события",
                     "verify": "Сверить регистрацию события после выбора лицензии",
                     "expected": "Появится проверяемая последовательность событий",
                     "missing": "Нет разреза корзины", "risk": "Изменение состава аудитории",
                     "evidence_ids": ["orders:0"], "contradictions": ["orders:1"],
-                }]})
+                    }]})
                 response = json.dumps({"choices": [{"message": {"content": content}}],
                                        "usage": {"total_tokens": 100}}).encode()
                 self.send_response(200)
@@ -59,10 +68,15 @@ class InvestigationTests(unittest.TestCase):
         self.assertEqual(report["llm_status"], "ok")
         self.assertEqual(ai_store.run(report["run_id"]), report)
         self.assertEqual(report["hypotheses"][0]["confidence"], "low")
-        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(seen), 5)
         self.assertEqual(seen[0]["response_format"]["type"], "json_schema")
-        context = json.loads(seen[0]["messages"][1]["content"])
+        self.assertEqual(json.loads(seen[0]["messages"][1]["content"])["evidence"], [])
+        observed = json.loads(seen[1]["messages"][1]["content"])
+        self.assertEqual({item["id"] for item in observed["evidence"]}, {"orders:0", "orders:1"})
+        context = json.loads(seen[3]["messages"][1]["content"])
         self.assertIn("release:current", {item["id"] for item in context["evidence"]})
+        self.assertEqual([item["tool"] for item in report["trace"] if item["step"] == "tool"], ["sales", "releases"])
+        self.assertEqual(report["termination"], "enough_evidence")
 
     def test_fallback_and_idempotent_review(self):
         report = investigation.analyze({"query": "корзина"})

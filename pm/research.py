@@ -78,10 +78,13 @@ def evidence():
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def sources():
+def imported_sources():
     local = private_dir() / "sources.json"
-    imported = json.loads(local.read_text(encoding="utf8")) if local.exists() else []
-    return evidence() + imported
+    return json.loads(local.read_text(encoding="utf8")) if local.exists() else []
+
+
+def sources():
+    return evidence() + imported_sources()
 
 
 def tokens(text):

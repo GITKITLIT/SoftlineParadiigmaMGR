@@ -5,12 +5,11 @@ import os
 import re
 from datetime import datetime, timezone
 from html import unescape
-from itertools import zip_longest
 from urllib.parse import urlsplit
 
-from .analytics import day, weeks
+from .analytics import WEEK, day, weeks
 from .research import search, sources, tokens
-from .service import metrika
+from .service import metrika, overview, recalculate
 
 TOPICS = {"pricing", "licensing", "checkout", "product_features", "support"}
 WEB_STATUSES = {"ok", "partial", "disabled", "unavailable", "error"}
@@ -79,6 +78,9 @@ def public_search(request, collector=None):
         normalized = [item for item in items if item]
         if len(normalized) != len(items):
             return "partial" if normalized else "error", "invalid_items", normalized
+        if response.get("source") == "synthetic_fixture":
+            for item in normalized:
+                item["data_mode"] = "synthetic"
         return status, reason, normalized
     except Exception:
         return "error", "adapter_failed", []
@@ -144,138 +146,240 @@ def safe_locator(ref):
     return re.sub(r"(?:[A-Za-z]:[\\/]|[/\\]{1,2})\S+", "[локальный путь]", clean(ref, 180))
 
 
-def collect(query, snapshot, request, *, collector=None, meter=metrika):
-    mode = "local" if os.getenv("PM_WORKBOOK") or os.getenv("PM_SNAPSHOT") else "synthetic"
-    cfg = snapshot["config"]
-    before, after = ((cfg[f"{key}_start"], cfg[f"{key}_end"]) for key in ("before", "after"))
-    periods = {"before": before, "after": after}
-    unequal = len(weeks(*map(day, before))) != len(weeks(*map(day, after)))
-    limits = []
-    if unequal:
-        limits.append("Число недель в окнах отличается. Сравниваются средние, сезонность не учтена.")
-    evidence = []
-    for i, series in enumerate(snapshot["series"][:4]):
-        values = {key: series.get(key) for key in ("before", "after", "delta", "rolling_base")}
-        if values["before"] in (0, None) or values["after"] is None:
-            limits.append("Для одной из групп относительное изменение недоступно.")
-        evidence.append(entry(
-            f"orders:{i}", "orders", series["name"], mode=mode, unit="index",
-            metric=cfg["metric"], period=periods, filter=snapshot.get("channel"), values=values,
-            quality="incomplete" if values["delta"] is None else "observed",
-        ))
-    if len(snapshot["series"]) < 2:
-        limits.append("Контрольная группа отсутствует.")
-    elif snapshot["series"][1].get("delta") is not None and snapshot["series"][0].get("delta") is not None:
-        core, control = (item["delta"] for item in snapshot["series"][:2])
-        if core < 0 and control >= 0:
-            limits.append("Основная и контрольная группы движутся по-разному. Это не устанавливает причину.")
-    for segment, values in list(snapshot.get("reach", {}).items())[:4]:
-        numerator, denominator = values.get("num"), values.get("den")
-        rate = 100 * numerator / denominator if numerator is not None and denominator else None
-        evidence.append(entry(
-            f"reach:{segment}", "funnel", "Выбор опции", mode=mode, unit="percent",
-            metric="cfg_reach_rate", filter={"segment": segment},
-            period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
-            quality="incomplete" if rate is None or values.get("days") != values.get("total") else "observed",
-            values=values | {"rate": rate},
-        ))
-    evidence.append(entry("release:current", "release", snapshot.get("release_id") or "Релиз",
-                          mode=mode, observed_at=snapshot.get("launch"),
-                          values={"related_task": snapshot.get("release_task")}))
-    backlog = snapshot.get("backlog") or {}
-    matches = [backlog] if backlog.get("id") else []
-    if matches:
-        evidence.append(entry("backlog:related", "backlog", backlog["id"],
-                              backlog.get("title", ""), mode=mode, values={"status": backlog.get("status")}))
-        if backlog["id"] != snapshot.get("release_task"):
-            limits.append("Найденная задача отличается от указанной связи релиза. Проверьте связь перед созданием дубля.")
 
-    begin, end = day(before[0]), day(after[1])
-    release_ids = set()
-    for row in snapshot.get("release_history", [])[:12]:
+TOOLS = {
+    "sales": "Средние индексы заказов, аномалия по порогу, контроль и полнота недель",
+    "funnel": "Достижение шага воронки по сегментам и покрытие дней в локальной выгрузке",
+    "metrika": "Показатели и цели Яндекс.Метрики по выбранному оператором периоду",
+    "releases": "Релизы в выбранных периодах и их связь с задачами",
+    "research": "Фрагменты интервью, CustDev и других пользовательских исследований",
+    "competitors": "Фрагменты локальных конкурентных исследований",
+    "backlog": "Связанная задача и похожие записи из существующего бэклога",
+    "public_competitors": "Конкуренты из явно выбранного публичного каталога",
+}
+FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors")
+
+
+class InvestigationContext:
+    """Per-run evidence ledger. No source is read before its tool is invoked."""
+
+    def __init__(self, query, request, *, collector=None, meter=None, snapshot_loader=None):
+        self.query = query
+        self.request = request
+        self.mode = "local" if os.getenv("PM_WORKBOOK") or os.getenv("PM_SNAPSHOT") else "synthetic"
+        self.collector = collector
+        self.meter = meter or metrika
+        self.load_snapshot = snapshot_loader or (lambda: overview(for_analysis=True))
+        self.snapshot = None
+        self.corpus = None
+        self.evidence = {}
+        self.seen_text = set()
+        self.limits = []
+        self.matches = []
+        self.completed = set()
+        self.statuses = {key: {"status": "not_checked"} for key in (
+            "sales", "funnel", "release", "backlog", "research", "competitor_local",
+            "metrika", "competitor_web",
+        )}
+        self.available = dict(TOOLS)
+        if not request.get("metrika"):
+            self.available.pop("metrika")
+            self.statuses["metrika"] = {"status": "disabled", "reason": "not_requested"}
+        if not request.get("web") or os.getenv("YANDEX_SEARCH_ENABLED", "").lower() != "true":
+            self.available.pop("public_competitors")
+            self.statuses["competitor_web"] = {
+                "status": "disabled",
+                "reason": "no_public_scope" if not request.get("web") else "configuration_disabled",
+            }
+
+    def get_snapshot(self):
+        if self.snapshot is None:
+            self.snapshot = recalculate(self.load_snapshot(), self.request.get("config", {}), allow_partial=True)
+        return self.snapshot
+
+    def add(self, item):
+        text = " ".join(item["text"].casefold().split())
+        if item["id"] in self.evidence or (text and text in self.seen_text):
+            return
+        if text:
+            self.seen_text.add(text)
+        self.evidence[item["id"]] = item
+
+    def run(self, name, arguments):
+        if name not in self.available or name in self.completed:
+            raise ValueError("Инструмент недоступен или уже вызван")
+        if arguments != {}:
+            raise ValueError("Инструменты принимают только параметры утверждённого запроса")
+        self.completed.add(name)
+        handlers = {
+            "sales": ("sales", self.sales),
+            "funnel": ("funnel", self.funnel),
+            "metrika": ("metrika", self.metrika),
+            "releases": ("release", self.releases),
+            "research": ("research", lambda: self.research(False)),
+            "competitors": ("competitor_local", lambda: self.research(True)),
+            "backlog": ("backlog", self.backlog),
+            "public_competitors": ("competitor_web", self.public),
+        }
+        key, handler = handlers[name]
+        before = set(self.evidence)
         try:
-            released = day(row["date"])
-        except (ValueError, KeyError, TypeError):
-            continue
-        if (begin <= released <= end and row.get("id")
-                and row["id"] not in release_ids and row["id"] != snapshot.get("release_id")):
-            release_ids.add(row["id"])
-            evidence.append(entry(f"release:nearby:{len(release_ids)}", "release", row["id"],
-                                  row.get("title", ""), mode=mode, observed_at=released.isoformat(),
-                                  values={"related_task": row.get("related_task")}))
-        if len(release_ids) == 3:
-            break
-    if release_ids:
-        limits.append("В сравниваемых окнах есть другие релизы. Их влияние требует отдельной проверки.")
+            status, reason = handler()
+        except TimeoutError:
+            status, reason = "unavailable", "timeout"
+        except (OSError, KeyError, IndexError, TypeError, AttributeError, ValueError):
+            status, reason = "error", "invalid_or_unavailable_input"
+        current = {"status": status}
+        if reason:
+            current["reason"] = reason
+        self.statuses[key] = current
+        return current | {"evidence_ids": [ref for ref in self.evidence if ref not in before]}
 
-    query_terms = tokens(query)
-    for row in snapshot.get("backlog_history", [])[:200]:
-        title = row.get("title", "")
-        if row.get("id") and query_terms & tokens(title) and not any(x["id"] == row["id"] for x in matches):
-            matches.append({k: row.get(k) for k in ("id", "title", "status")})
-            evidence.append(entry(f"backlog:match:{len(matches)}", "backlog", row["id"],
-                                  title, mode=mode, values={"status": row.get("status")}))
-        if len(matches) >= 4:
-            break
+    def sales(self):
+        snapshot = self.get_snapshot()
+        cfg = snapshot["config"]
+        before, after = ((cfg[f"{key}_start"], cfg[f"{key}_end"]) for key in ("before", "after"))
+        periods = {"before": before, "after": after}
+        counts = {key: len(weeks(*map(day, dates))) for key, dates in periods.items()}
+        if counts["before"] != counts["after"]:
+            self.limits.append("Длина окон отличается. Сравнение средних не учитывает сезонность.")
+        series_rows = snapshot["series"][:4]
+        incomplete = False
+        for i, series in enumerate(series_rows):
+            values = {key: series.get(key) for key in ("before", "after", "delta", "rolling_base")}
+            usable = values["delta"] is not None
+            incomplete |= not usable
+            self.add(entry(
+                f"orders:{i}", "orders", series["name"], mode=self.mode, unit="index",
+                metric=cfg["metric"], period=periods, filter=snapshot.get("channel"),
+                values=values | {"weeks_before": counts["before"], "weeks_after": counts["after"],
+                                 "alert_percent": cfg["alert_percent"]},
+                quality="observed" if usable else "incomplete",
+                source_group="orders_series",
+            ))
+        if not series_rows:
+            return "missing", "no_series"
+        if len(series_rows) < 2:
+            self.limits.append("Контрольная группа отсутствует.")
+        if incomplete:
+            self.limits.append("Относительное изменение недоступно для ряда с пропусками или нулевой базой.")
+        has_missing = any(row["before"] is None or row["after"] is None for row in series_rows)
+        return ("partial", "missing_weeks" if has_missing else "zero_baseline") if incomplete else ("ok", None)
 
-    corpus = sources()
-    if mode == "local" and not os.getenv("PM_EVIDENCE"):
-        from .research import evidence as default_evidence
-        demo_ids = {x["id"] for x in default_evidence()}
-        corpus = [x for x in corpus if x.get("id") not in demo_ids]
-    hits = search(query, corpus)
-    web_status, web_reason, web = public_search(request.get("web"), collector)
-    statuses = {
-        "sales": {"status": "ok" if snapshot["series"] else "missing"},
-        "research": {"status": "ok" if hits else "missing"},
-        "release": {"status": "ok" if snapshot.get("launch") else "missing"},
-        "backlog": {"status": "ok" if matches else "missing"},
-        "competitor_web": {"status": web_status, "reason": web_reason},
-        "metrika": {"status": "disabled", "reason": "not_requested"},
-    }
-    meter_request = request.get("metrika")
-    if meter_request:
-        if not isinstance(meter_request, dict):
-            raise ValueError("Укажите параметры Метрики объектом")
-        report = meter(meter_request["start"], meter_request["end"],
-                       segment=meter_request.get("segment"), detailed=True)
-        statuses["metrika"] = {"status": report.get("status", "missing"), "reason": report.get("reason")}
+    def funnel(self):
+        snapshot = self.get_snapshot()
+        cfg = snapshot["config"]
+        reach = snapshot.get("reach", {})
+        incomplete = False
+        for segment, values in list(reach.items())[:4]:
+            num, den = values.get("num"), values.get("den")
+            rate = 100 * num / den if num is not None and den else None
+            partial = rate is None or values.get("days") != values.get("total")
+            incomplete |= partial
+            self.add(entry(
+                f"reach:{segment}", "funnel", "Выбор опции", mode=self.mode, unit="percent",
+                metric="cfg_reach_rate", filter={"segment": segment},
+                period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
+                quality="incomplete" if partial else "observed",
+                values=values | {"rate": rate}, source_group="store_funnel",
+            ))
+        return ("missing", "no_segments") if not reach else ("partial", "incomplete_coverage") if incomplete else ("ok", None)
+
+    def releases(self):
+        snapshot = self.get_snapshot()
+        current = snapshot.get("release_id")
+        launch = snapshot.get("launch")
+        if launch:
+            self.add(entry("release:current", "release", current or "Релиз",
+                           mode=self.mode, observed_at=launch, source_group="release_log",
+                           values={"related_task": snapshot.get("release_task")}))
+        cfg = snapshot["config"]
+        begin, end = day(cfg["before_start"]), day(cfg["after_end"])
+        release_ids = set()
+        for row in snapshot.get("release_history", [])[:12]:
+            try:
+                released = day(row["date"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            row_id = row.get("id")
+            if begin <= released < end + WEEK and row_id and row_id not in release_ids and row_id != current:
+                release_ids.add(row_id)
+                self.add(entry(f"release:nearby:{len(release_ids)}", "release", row_id,
+                               row.get("title", ""), mode=self.mode, observed_at=released.isoformat(),
+                               values={"related_task": row.get("related_task")}, source_group="release_log"))
+            if len(release_ids) == 3:
+                break
+        if release_ids:
+            self.limits.append("В сравниваемых окнах есть другие релизы. Их влияние требует отдельной проверки.")
+        return ("ok", None) if launch or release_ids else ("missing", "no_release")
+
+    def backlog(self):
+        snapshot = self.get_snapshot()
+        backlog = snapshot.get("backlog") or {}
+        if backlog.get("id"):
+            self.add(entry("backlog:related", "backlog", backlog["id"], backlog.get("title", ""),
+                           mode=self.mode, values={"status": backlog.get("status")}, source_group="backlog"))
+            self.matches.append(backlog)
+            if backlog["id"] != snapshot.get("release_task"):
+                self.limits.append("Задача отличается от указанной связи релиза. Проверьте связь перед созданием дубля.")
+        terms = tokens(self.query)
+        for row in snapshot.get("backlog_history", [])[:200]:
+            title = row.get("title", "")
+            if row.get("id") and terms & tokens(title) and not any(x["id"] == row["id"] for x in self.matches):
+                self.matches.append({key: row.get(key) for key in ("id", "title", "status")})
+                self.add(entry(f"backlog:match:{len(self.matches)}", "backlog", row["id"], title,
+                               mode=self.mode, values={"status": row.get("status")}, source_group="backlog"))
+            if len(self.matches) >= 4:
+                break
+        return ("ok", None) if self.matches else ("missing", "no_matching_task")
+
+    def research(self, competitors):
+        if self.corpus is None:
+            if self.mode == "local" and not os.getenv("PM_EVIDENCE"):
+                from .research import imported_sources
+                self.corpus = imported_sources()
+            else:
+                self.corpus = sources()
+        items = [item for item in self.corpus if (item["kind"] == "Конкуренты") == competitors]
+        hits = search(self.query, items)[:6]
+        for item in hits:
+            ref = safe_locator(item["ref"])
+            kind = {"Интервью": "interview", "Конкуренты": "competitor_local",
+                    "Бэклог": "backlog"}.get(item["kind"], "research")
+            identifier = "file:" + hashlib.sha256(str(item["id"]).encode()).hexdigest()[:18]
+            provenance = item.get("locator")
+            private = provenance or str(item["id"]).startswith("u-") or os.getenv("PM_EVIDENCE")
+            locator = ref
+            if isinstance(provenance, dict):
+                locator = {key: safe_locator(provenance[key]) for key in ("file", "sheet", "cell", "paragraph")
+                           if key in provenance}
+            group = locator.get("file", ref) if isinstance(locator, dict) else ref.split(" · ", 1)[0]
+            self.add(entry(identifier, kind, ref, item["text"], mode="local" if private else self.mode,
+                           locator=locator, quality="excerpt", source_group=f"document:{group}",
+                           observed_at=item.get("observed_at")))
+        return ("ok", None) if hits else ("missing", "no_relevant_excerpt")
+
+    def metrika(self):
+        params = self.request["metrika"]
+        if not isinstance(params, dict):
+            return "error", "invalid_metric_scope"
+        report = self.meter(params["start"], params["end"], segment=params.get("segment"), detailed=True)
         for key, metric in report.get("metrics", {}).items():
-            evidence.append(entry(
+            quality = "incomplete" if metric["value"] is None else "sampled" if report.get("sampled") else "observed"
+            self.add(entry(
                 f"metrika:{key}", "metrika", key, mode=report["scope"], unit=metric["unit"],
                 metric=metric["metric"], period=report["period"], filter=report.get("segment"),
                 retrieved_at=report.get("retrieved"), values={"value": metric["value"]},
-                quality="sampled" if report.get("sampled") else "observed",
+                quality=quality, source_group=f"metrika:{report['scope']}",
             ))
         if report.get("metrics"):
-            limits.append("Счётчик Метрики рассматривается отдельно от заказов. Визиты не подтверждают изменение продаж.")
+            self.limits.append("Счётчик Метрики рассматривается отдельно от заказов. Визиты не подтверждают изменение продаж.")
         if report.get("missing"):
-            limits.append("Для выбранного счётчика отсутствует настроенная цель или e-commerce.")
-    seen_ids = {x["id"] for x in evidence}
-    seen_text = set()
-    local_hits = []
-    for item in hits:
-        ref = safe_locator(item["ref"])
-        kind = {"Интервью": "interview", "Конкуренты": "competitor_local",
-                "Бэклог": "backlog"}.get(item["kind"], "research")
-        identifier = "file:" + hashlib.sha256(str(item["id"]).encode()).hexdigest()[:18]
-        provenance = item.get("locator")
-        item_mode = "local" if (
-            mode == "local" or provenance or str(item["id"]).startswith("u-") or os.getenv("PM_EVIDENCE")
-        ) else "synthetic"
-        locator = ref
-        if isinstance(provenance, dict):
-            locator = {key: safe_locator(provenance[key]) for key in ("file", "sheet", "cell", "paragraph")
-                       if key in provenance}
-        local_hits.append(entry(identifier, kind, ref, item["text"], mode=item_mode,
-                                locator=locator, quality="excerpt"))
-    interleaved = (item for pair in zip_longest(local_hits, web) for item in pair if item)
-    for item in interleaved:
-        normalized = " ".join(item["text"].casefold().split())
-        if not normalized or normalized in seen_text or item["id"] in seen_ids:
-            continue
-        seen_text.add(normalized)
-        seen_ids.add(item["id"])
-        evidence.append(item)
-    statuses["competitor_local"] = {"status": "ok" if any(x["kind"] == "competitor_local" for x in evidence) else "missing"}
-    return mode, evidence[:24], statuses, limits, matches
+            self.limits.append("Для счётчика отсутствует настроенная цель или e-commerce.")
+        return report.get("status", "missing"), report.get("reason")
+
+    def public(self):
+        status, reason, items = public_search(self.request["web"], self.collector)
+        for item in items:
+            self.add(item | {"source_group": f"public:{urlsplit(item['locator']).hostname}"})
+        return status, reason
