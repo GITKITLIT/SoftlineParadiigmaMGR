@@ -1,5 +1,7 @@
 # План финальной интеграции
 
+Эта версия фиксирует план, подготовленный на интеграционной базе. Для фактического состава предварительной ветки и переноса следующих handoff см. [сводку кандидата](PRELIMINARY_RELEASE.md).
+
 База этого handoff — `5e956ca08f67cd0d4501596d85c14493239b8ffa`. Изменения относительно принятого кода `c25dea94cd7c4a8a1b5696ffa812ff9fec3e7b8b` в базовом коммите касаются трёх документов. CI обоих SHA успешен. [Код](https://github.com/GITKITLIT/SoftlineParadiigmaMGR/actions/runs/45984517499) · [База](https://github.com/GITKITLIT/SoftlineParadiigmaMGR/actions/runs/45986505399)
 
 | Источник | SHA | Что подлежит переносу |
