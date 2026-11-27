@@ -26,6 +26,27 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result["monthly_rub"], "3.00")
         self.assertEqual(result["rub_per_manager"], "0.60")
 
+    def test_combined_quote_keeps_fixed_host_and_measured_load_separate(self):
+        from scripts.qwen.cost import PER_MANAGER
+
+        quote = estimate_cost.template()
+        quote.update(region="synthetic", quote_date="2026-01-01")
+        for item in quote["items"].values():
+            item.update(quantity=0, rub_per_unit=0)
+        quote["items"]["application_vm"].update(quantity=720, rub_per_unit=2)
+        quote["items"]["dedicated_model_vm"].update(quantity=720, rub_per_unit=3)
+        quote["items"]["smtp"].update(quantity=1, rub_per_unit="0.45")
+        benchmark = {"mode": "live", "samples": [
+            {"id": name, "wall_seconds": 10} for name in (*PER_MANAGER, "monitor")
+        ]}
+        result = estimate_cost.with_qwen(quote, benchmark)
+        self.assertEqual(result["fixed_and_usage_quote_month"]["monthly_rub"], "3600.45")
+        rows = result["model_compute_estimate_week"]["estimates"]
+        self.assertEqual([row["managers"] for row in rows], [1, 5, 35])
+        self.assertEqual(result["model_compute_estimate_week"]["machine_hour_price"], 3)
+        self.assertEqual(rows[0]["weekly_dedicated_host_estimate"], 504)
+        self.assertLess(rows[2]["weekly_compute_estimate"], rows[2]["weekly_dedicated_host_estimate"])
+
     def test_diagnostics_do_not_disclose_private_values_or_create_db(self):
         folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
         path = folder / "ai.sqlite3"
