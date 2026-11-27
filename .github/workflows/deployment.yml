@@ -29,4 +29,9 @@ jobs:
           python-version: '3.12'
       - run: python scripts/deploy/scan_index.py
       - run: python -m pip install -r requirements.txt
+      - name: Install proxy test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nginx apache2-utils
       - run: python -m unittest discover -s tests -v

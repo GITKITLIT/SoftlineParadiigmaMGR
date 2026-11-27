@@ -53,3 +53,13 @@ __pycache__/
 build/
 dist/
 node_modules/
+
+# Deployment state and SQLite auxiliary files
+*.sqlite
+*.sqlite3
+*.db
+*-wal
+*-shm
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal

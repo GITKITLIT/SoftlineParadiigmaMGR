@@ -96,6 +96,27 @@ class BackendResilience(unittest.TestCase):
             self.assertEqual(result["llm_status"], "unavailable")
             self.assertTrue(result["findings"])
 
+    def test_integration_credentials_stay_out_of_http_and_exports(self):
+        canary = "synthetic-credential-" + os.urandom(12).hex()
+        self.env.update(METRIKA_TOKEN=canary, METRIKA_COUNTER_ID="123",
+                        YANDEX_SEARCH_API_KEY=canary, YANDEX_SEARCH_ENABLED="false")
+        self.start()
+        status, run = self.post("/api/analyze", {"query": "Снижение заказов"})
+        self.assertEqual(status, 200)
+        with closing(http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)) as client:
+            client.request("GET", "/")
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertNotIn(canary.encode(), response.read())
+        for route, body in (("/api/analysis/settings", {}), ("/api/analysis/journal", {}),
+                            ("/api/analysis/report", {"run_id": run["run_id"]}),
+                            ("/api/analysis/export", {"run_id": run["run_id"]})):
+            with self.subTest(route=route):
+                status, data = self.post(route, body)
+                self.assertEqual(status, 200)
+                self.assertNotIn(canary, json.dumps(data))
+        self.assertNotIn(canary, json.dumps(run))
+
     def test_storage_path_becomes_unavailable(self):
         self.start()
         self.db_dir.mkdir(exist_ok=True)
