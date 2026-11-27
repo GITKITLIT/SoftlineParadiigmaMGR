@@ -1,0 +1,17 @@
+# Include at the end of the model node's sshd_config, after global settings.
+Match User pm-model-forward
+    AuthenticationMethods publickey
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AuthorizedKeysFile /etc/ssh/pm-model-authorized-keys/%u
+    MaxSessions 0
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:18081
+    PermitListen none
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitTTY no
+    PermitUserRC no
