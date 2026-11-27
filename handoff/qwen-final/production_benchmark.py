@@ -50,7 +50,8 @@ class Profile:
     batch: int = 2048
     ubatch: int = 512
     cache_mib: int = 512
-    kv: str = "f16"
+    kv_k: str = "f16"
+    kv_v: str = "f16"
     reuse: int = 0
 
     def command(self, binary, model, port, gpu_layers, seed):
@@ -61,7 +62,7 @@ class Profile:
                 "--threads", str(self.threads), "--threads-batch", str(self.threads_batch),
                 "--ctx-size", str(self.context * self.slots), "--parallel", str(self.slots),
                 "--batch-size", str(self.batch), "--ubatch-size", str(self.ubatch),
-                "--cache-ram", str(self.cache_mib), "--cache-type-k", self.kv, "--cache-type-v", self.kv,
+                "--cache-ram", str(self.cache_mib), "--cache-type-k", self.kv_k, "--cache-type-v", self.kv_v,
                 "--cache-reuse", str(self.reuse), "--reasoning", "off",
                 "--chat-template-kwargs", '{"enable_thinking":false}', "--seed", str(seed), "--metrics"]
 
@@ -91,9 +92,14 @@ class RecordedResponse:
             return data
         timings = obj.get("timings") or {}
         choice = next(iter(obj.get("choices") or []), {})
-        self.row.update(usage=qwen.token_usage(obj), result=choice.get("finish_reason", "missing_choice"),
+        usage = qwen.token_usage(obj)
+        self.row.update(usage=usage, result=choice.get("finish_reason", "missing_choice"),
                         timings={key: timings[key] for key in ("cache_n", "prompt_n", "prompt_ms",
                                  "predicted_n", "predicted_ms") if isinstance(timings.get(key), (float, int))})
+        if "prompt_tokens" in usage:
+            self.row["prompt_plus_output_budget_tokens"] = usage["prompt_tokens"] + self.row["max_tokens"]
+        if isinstance(obj.get("truncated"), bool):
+            self.row["truncated"] = obj["truncated"]
         return data
 
 
@@ -110,6 +116,8 @@ def instrument(*handlers, synthesis_max_tokens=None):
             body["max_tokens"] = min(body["max_tokens"], synthesis_max_tokens)
             request.data = json.dumps(body).encode()
         row = {"stage": schema.get("name"), "max_tokens": body["max_tokens"]}
+        if "timeout" in kwargs:
+            row["transport_timeout_seconds"] = round(kwargs["timeout"], 3)
         TELEMETRY.calls.append(row)
         started = perf_counter()
         try:
@@ -392,6 +400,8 @@ def main():
     server.add_argument("--server", type=Path)
     server.add_argument("--existing-endpoint", action="store_true", help="Measure a ready model on the loopback port")
     parser.add_argument("--expected-slots", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--ctx-per-slot", type=int, choices=(4096, 6144, 8192), default=8192,
+                        help="Context for --profile one-slot and expected context for --existing-endpoint")
     parser.add_argument("--candidate-server", type=Path)
     parser.add_argument("--model", type=Path)
     parser.add_argument("--output", type=Path, required=True, help="New private output directory")
@@ -406,6 +416,8 @@ def main():
     parser.add_argument("--threads-batch", type=int, default=4, help="Candidate prefill threads")
     parser.add_argument("--batch-size", type=int, default=512, help="Candidate logical batch size")
     parser.add_argument("--ubatch-size", type=int, default=256, help="Candidate physical batch size")
+    parser.add_argument("--kv-k", choices=("f16", "q8_0"), default="f16", help="Candidate key-cache type")
+    parser.add_argument("--kv-v", choices=("f16", "q8_0"), default="f16", help="Candidate value-cache type")
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--port", type=int)
     parser.add_argument("--seed", type=int, default=42)
@@ -439,8 +451,8 @@ def main():
             context, slots = model_properties(args.port)
         except (OSError, ValueError, KeyError, RuntimeError) as error:
             parser.error(f"Loopback model probe failed: {type(error).__name__}")
-        if (context, slots) != (8192, args.expected_slots):
-            parser.error(f"Expected 8192 tokens and {args.expected_slots} slot(s), got {context} and {slots}")
+        if (context, slots) != (args.ctx_per_slot, args.expected_slots):
+            parser.error(f"Expected {args.ctx_per_slot} tokens and {args.expected_slots} slot(s), got {context} and {slots}")
         args.output.mkdir(mode=0o700)
         write(args, {"event": "endpoint", "reported_context_per_slot": context, "reported_slots": slots,
                      "weight_digest_verified_by_runner": False})
@@ -470,10 +482,11 @@ def main():
     write(args, {"event": "host", "hardware": hardware(), "gguf_sha256": DIGEST,
                  "seed": args.seed, "gpu_layers": args.gpu_layers, "synthesis_max_tokens": args.synthesis_max_tokens})
     one = Profile(threads=args.threads, threads_batch=args.threads_batch, slots=1,
-                  batch=args.batch_size, ubatch=args.ubatch_size)
+                  context=args.ctx_per_slot, batch=args.batch_size, ubatch=args.ubatch_size,
+                  kv_k=args.kv_k, kv_v=args.kv_v)
     profiles = {"baseline": Profile(), "one-slot-baseline": replace(Profile(), slots=1),
                 "one-slot": one, "two-slots": replace(one, slots=2),
-                "short-context": replace(one, context=4096), "kv-q8": replace(one, kv="q8_0"),
+                "short-context": replace(one, context=4096), "kv-q8": replace(one, kv_k="q8_0", kv_v="q8_0"),
                 "reuse": replace(one, reuse=256), "no-ram-cache": replace(one, cache_mib=0)}
     for name in args.profile or ("baseline", "one-slot"):
         profile_runs(args, name, profiles[name], gpu_layers=args.gpu_layers)
@@ -484,7 +497,7 @@ def failed_checks(output):
     rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines() if line]
     assessed = [item for row in rows if row.get("case") not in {None, "stream"}
                 for item in row["result"].get("samples", [row["result"]])]
-    return int(any(not all(row["checks"].values()) or any(call["result"] != "stop"
+    return int(any(not all(row["checks"].values()) or any(call["result"] != "stop" or call.get("truncated")
                     for call in row["model_http"]) for row in assessed))
 
 

@@ -28,7 +28,31 @@ PM_QWEN_QUALITATIVE=true
 
 ## Начальный профиль Qwen
 
-Использовать Qwen3‑4B Q4_K_M с SHA‑256 `7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5`. Лаунчер принятой версии проверяет хэш и задаёт по умолчанию один слот, 8192 токена, CPU, 4 потока генерации и 8 потоков батча. Совместимый `llama-server` должен поддерживать `--cache-ram 512`, `--reasoning off` и выдавать ожидаемые параметры через `/props`. Начать со штатного F16 KV. Проверить CPU и квоту перед подбором потоков. Меньшее окно, иной KV и новые лимиты вывода остаются отдельными экспериментами с проверкой качества.
+Утверждённый узел модели — 1Gb.ru, Ubuntu 24.04 x86‑64, Intel Sandy Bridge, 4 vCPU, 7,8 ГиБ RAM и 1,4 ГиБ swap. Процесс приложения и SQLite будут на VPS Яндекс Облака. Для выбора профиля учитываются AVX и SSE4.2, без AVX2, FMA, F16C и AVX‑512. Эти параметры сообщены владельцем задачи. Эффективные флаги и лимиты сверяются на сервере.
+
+Использовать Qwen3‑4B Q4_K_M с SHA‑256 `7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5`. Лаунчер проверяет хэш и задаёт CPU, один слот, 8192 токена, F16 KV по умолчанию, кеш префиксов 512 МиБ и non-thinking. Штатные 4 потока генерации и 8 потоков батча служат контрольным профилем. Первым кандидатом сравнивается 4/4 с теми же параметрами. Так сохраняется одно изменение за прогон.
+
+### Поставка b12800 для Максима
+
+Релиз `b12800`, commit `47d6192fce301f627c4d3e1c6910588c364dce0e`. Официальный файл `llama-b12800-bin-ubuntu-x64.tar.gz`, SHA‑256 `5cdb713ff7ba383095308139e7a27ac2f68781e2999253c9ff343543d8fa4426`. Архив скачан и проверен локально. ELF-метаданные `libggml-cpu-sandybridge.so` содержат зависимость `libgomp.so.1`. Установить штатный пакет Ubuntu `libgomp1`. Бинарник и библиотеки одной версии размещаются под уже разрешёнными путями AppArmor. [Релиз llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b12800) · [libgomp1 для Ubuntu 24.04](https://packages.ubuntu.com/noble/libgomp1)
+
+В согласованное окно Максим устанавливает проверенный `/usr/local/bin/llama-server` обычным файлом. Библиотеки размещает в root-owned `/usr/local/lib/llama-b12800`, отдельно от других версий. Для сервера из проверенного архива нужны перечисленные ниже файлы, включая целевые версии относительных ссылок. `install` копирует их содержимое под нужными именами. Существующие файлы и конфигурацию следует сохранить в согласованной точке отката.
+
+```sh
+# Из корня ветки handoff/qwen-final. runtime_source — распакованный каталог llama-b12800.
+sudo apt-get install libgomp1
+sudo install -d -o root -g root -m 0755 /usr/local/lib/llama-b12800
+for name in libllama-server-impl.so libllama-common.so.1 libmtmd.so.1 \
+  libllama.so.1 libggml.so.1 libggml-base.so.1 libggml-cpu-sandybridge.so; do
+  sudo install -o root -g root -m 0644 "$runtime_source/$name" "/usr/local/lib/llama-b12800/$name"
+done
+sudo install -o root -g root -m 0755 "$runtime_source/llama-server" /usr/local/bin/llama-server
+sudo install -d -o root -g root -m 0755 /etc/systemd/system/paradiigma-qwen.service.d
+sudo install -o root -g root -m 0644 handoff/qwen-final/runtime/20-llama-b12800.conf \
+  /etc/systemd/system/paradiigma-qwen.service.d/20-llama-b12800.conf
+```
+
+[Drop-in](runtime/20-llama-b12800.conf) задаёт каталог библиотек и явно указывает файл Sandy Bridge backend. Проверить, что в `/usr/local/bin` и рабочем каталоге службы нет старых `libggml-cpu*.so`, которые могли бы подключиться обычным поиском ggml. Loader `GGML_BACKEND_PATH` загружает дополнительный backend и сам по себе не отменяет автоматический поиск. После применения drop-in требуется проверить `/proc/<llama-pid>/maps`: из CPU-модулей должен быть загружен только `libggml-cpu-sandybridge.so`. Если сборка не стартует под текущим AppArmor, зафиксировать конкретное сообщение OS и передать Максиму. [Загрузка backend в b12800](https://github.com/ggml-org/llama.cpp/blob/b12800/ggml/src/ggml-backend-reg.cpp)
 
 ```sh
 /usr/bin/python3 -B scripts/run_model.py \
