@@ -5,7 +5,7 @@ from threading import BoundedSemaphore, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from . import investigation
+from . import investigation, qwen
 
 JOBS = OrderedDict()
 LOCK = Lock()
@@ -41,6 +41,9 @@ def start(request, analyze=investigation.analyze, *, private=False):
             report = analyze(request, progress=progress)
             with LOCK:
                 JOBS[identifier].update(status="ready", run_id=report["run_id"], updated=monotonic())
+        except qwen.InvestigationQueueError as error:
+            with LOCK:
+                JOBS[identifier].update(status="failed", message=str(error), updated=monotonic())
         except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
             with LOCK:
                 JOBS[identifier].update(status="failed", updated=monotonic())
@@ -58,7 +61,11 @@ def start(request, analyze=investigation.analyze, *, private=False):
             JOBS.pop(identifier, None)
         SLOTS.release()
         raise ValueError("Не удалось запустить расследование") from None
-    return {"job_id": identifier}
+    response = {"job_id": identifier}
+    if qwen.single_slot_enabled():
+        # A second client may use both the queue and execution budgets.
+        response["wait_seconds"] = 2 * qwen.SANDY_BRIDGE_BUDGET.total + 100
+    return response
 
 
 def status(identifier, *, private=False):

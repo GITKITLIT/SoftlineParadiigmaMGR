@@ -23,8 +23,6 @@ trap cleanup EXIT
 git -C "$repo" archive "$revision" | tar -xf - -C "$tree"
 cd "$tree"
 package=handoff/qwen-final
-git apply "$package/runtime/ai-core-sandy-bridge-one-slot.patch"
-git apply "$package/runtime/ai-core-stable-planner-prefix.patch"
 cp "$package/production_benchmark.py" scripts/qwen/production_benchmark.py
 cp "$package/runtime/probe_sandy_bridge_ai_core.py" .
 

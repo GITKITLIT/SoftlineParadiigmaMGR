@@ -17,9 +17,9 @@
     research: "Интервью и исследования", competitors: "Конкуренты", history: "История", metrika: "Яндекс.Метрика",
     public_competitors: "Публичные доказательства", effect: "Эффект релиза", compare_history: "Сравнение периодов",
     search_history: "Поиск в памяти", competitor_history: "Исторические цены", product_history: "История продукта"};
-  const states = {ok: "готово", running: "выполняется", missing: "нет данных", partial: "частично",
+  const states = {waiting: "ожидание", ok: "готово", running: "выполняется", missing: "нет данных", partial: "частично",
     disabled: "выключен", unavailable: "недоступен", error: "ошибка", not_checked: "не проверен"};
-  const phases = {decision: "Выбор источника", synthesis: "Синтез гипотез"};
+  const phases = {queue: "В очереди к модели", decision: "Выбор источника", synthesis: "Синтез гипотез"};
   let dialogId = "", busy = false, selectedScope, opened = false, movement, skipClick = false, animation;
   let anchor;
   try { anchor = JSON.parse(localStorage.getItem("pm.chat.position")); } catch { /* browser setting */ }
@@ -377,9 +377,9 @@
     try {
       if (!dialogId) await createDialog();
       const scope = window.qwenCore.scope();
-      const {job_id} = await request("start", {dialog_id: dialogId, question, mode: mode.value,
+      const {job_id, wait_seconds} = await request("start", {dialog_id: dialogId, question, mode: mode.value,
         scope: {...scope, ...selectedScope}});
-      const deadline = Date.now() + 270000;
+      const deadline = Date.now() + (wait_seconds ?? 270) * 1000;
       while (Date.now() < deadline) {
         const state = await request("status", {dialog_id: dialogId, job_id});
         if (state.status === "ready") {
@@ -392,7 +392,7 @@
           await refreshDialogs();
           return;
         }
-        if (state.status === "failed") throw Error("Расследование завершилось с ошибкой. Проверьте область и источники.");
+        if (state.status === "failed") throw Error(state.message || "Расследование завершилось с ошибкой. Проверьте область и источники.");
         const phase = state.phases.at(-1);
         if (phase) progress.textContent = [names[phase.tool] || phases[phase.step], states[phase.status] || phase.status].filter(Boolean).join(" · ");
         await new Promise((resolve) => setTimeout(resolve, 650));

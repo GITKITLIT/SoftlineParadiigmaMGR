@@ -12,9 +12,13 @@ from .cross_analysis import correlate, strengthen
 from .product_decisions import task_proposals
 
 
+@qwen.single_slot_investigation
 def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
-            snapshot_loader=None, previous=None, persist=True, progress=None):
+            snapshot_loader=None, previous=None, persist=True, progress=None, _budget=None):
     started = time.perf_counter()
+    now = time.monotonic()
+    deadline = now + _budget.total if _budget else None
+    planning_end = min(deadline, now + _budget.planning) if _budget else None
     query = request.get("query", "")
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
@@ -23,12 +27,14 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     request = request | {"query": query}
     context = InvestigationContext(query, request, collector=collector, meter=meter,
                                    snapshot_loader=snapshot_loader, remember=persist)
-    planner = decide if decide is not None else qwen.planner() if infer is None else None
+    planner = decide
+    if planner is None and infer is None:
+        planner = qwen.planner(_budget.planning_step) if _budget else qwen.planner()
     screened = off_topic(query)
     if screened:
         trace, planning_usage, termination = [{"step": "scope", "status": "out_of_scope", "actor": "server"}], {}, "out_of_scope"
     else:
-        trace, planning_usage, termination = investigate(context, planner, progress=progress)
+        trace, planning_usage, termination = investigate(context, planner, progress=progress, deadline=planning_end)
     if termination != "out_of_scope" and context.evidence and "backlog" in context.available and "backlog" not in context.completed:
         check = context.run("backlog", {})
         trace.append({"step": "tool", "tool": "backlog", "actor": "server",
@@ -108,7 +114,9 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     else:
         if progress:
             progress({"step": "synthesis", "status": "running"})
-        status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False, facts=findings)
+        status, hypotheses, usage, reason = qwen.infer(
+            query, evidence, planning=False, facts=findings, budget=_budget, deadline=deadline,
+        )
     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
     if termination == "out_of_scope":
         summary = "Вопрос за пределами продуктовой аналитики."
