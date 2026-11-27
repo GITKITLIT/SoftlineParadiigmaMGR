@@ -13,6 +13,7 @@ EVENT_FIELDS = {"high", "oom", "oom_kill"}
 HOST_MEMORY_FIELDS = {"MemAvailable", "SwapTotal", "SwapFree"}
 HOST_SWAP_FIELDS = {"pswpin", "pswpout"}
 HOST_CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+PROCESS_MEMORY_FIELDS = {"VmRSS", "VmHWM"}
 
 
 def counters(path, fields):
@@ -22,9 +23,11 @@ def counters(path, fields):
         return {}
     values = {}
     for line in lines:
-        key, raw, *_ = line.split()
-        if key.rstrip(":") in fields:
-            values[key.rstrip(":")] = int(raw)
+        parts = line.split()
+        if len(parts) >= 2:
+            key = parts[0].rstrip(":")
+            if key in fields:
+                values[key] = int(parts[1])
     return values
 
 
@@ -41,6 +44,23 @@ def cpu_ticks(path):
     return dict(zip(HOST_CPU_FIELDS, map(int, fields[:len(HOST_CPU_FIELDS)])))
 
 
+def model_processes(group, proc):
+    try:
+        pids = (group / "cgroup.procs").read_text().split()
+    except FileNotFoundError:
+        return []
+    models = []
+    for pid in pids:
+        process = proc / pid
+        try:
+            name = (process / "comm").read_text().strip()
+        except FileNotFoundError:
+            continue
+        if name == "llama-server":
+            models.append({"pid": int(pid), **counters(process / "status", PROCESS_MEMORY_FIELDS)})
+    return models
+
+
 def sample(group, proc):
     return {
         "measured_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -49,6 +69,7 @@ def sample(group, proc):
         "memory_lifetime_peak_bytes": integer(group / "memory.peak"),
         "swap_current_bytes": integer(group / "memory.swap.current"),
         "memory_events": counters(group / "memory.events", EVENT_FIELDS),
+        "llama_process_memory_kib": model_processes(group, proc),
         "cpu": counters(group / "cpu.stat", CPU_FIELDS),
         "host_cpu_ticks": cpu_ticks(proc / "stat"),
         "host_memory_kib": counters(proc / "meminfo", HOST_MEMORY_FIELDS),
