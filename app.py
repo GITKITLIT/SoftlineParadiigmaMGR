@@ -20,14 +20,31 @@ def as_json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
-def page(data=None):
+def qwen_chat_enabled():
+    return os.getenv("PM_QWEN_CHAT_ENABLED", "").lower() == "true"
+
+
+def frontend_script(*, qwen_chat=False):
+    original = (ROOT / "web/app.js").read_text(encoding="utf8")
+    if not qwen_chat:
+        return original
+    from llm_lab.integration.frontend import with_chat
+    return with_chat(original, ROOT)
+
+
+def page(data=None, *, qwen_chat=False):
     data = data or overview()
     benchmark = os.getenv("PM_BENCHMARK")
     example = json.loads(Path(benchmark).read_text(encoding="utf-8-sig")) if benchmark else None
     html = (ROOT / "web/index.html").read_text(encoding="utf8")
+    if qwen_chat:
+        component = ROOT / "llm_lab/integration"
+        html = html.replace("</style>", (component / "chat.css").read_text(encoding="utf8") + "</style>", 1)
+        html = html.replace('<script type="application/json"',
+                            (component / "chat.html").read_text(encoding="utf8") + '<script type="application/json"', 1)
     return (
         html.replace("/*STYLE*/", (ROOT / "web/style.css").read_text(encoding="utf8"))
-        .replace("/*SCRIPT*/", (ROOT / "web/app.js").read_text(encoding="utf8"))
+        .replace("/*SCRIPT*/", frontend_script(qwen_chat=qwen_chat))
         .replace(
             "/*BOOT*/",
             as_json(
@@ -151,11 +168,13 @@ class Handler(BaseHTTPRequestHandler):
             and self.headers.get("Origin", "http://" + host) == "http://" + host
         )
 
-    def reply(self, status, ctype, body):
+    def reply(self, status, ctype, body, *, cookie=None):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -166,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/":
-            self.reply(200, "text/html; charset=utf-8", page().encode())
+            self.reply(200, "text/html; charset=utf-8", page(qwen_chat=qwen_chat_enabled()).encode())
         elif path == "/cost.xlsx" and (ROOT / "build/cost.xlsx").is_file():
             self.reply(
                 200,
@@ -177,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, "text/plain", b"Not found")
 
     def do_POST(self):
-        status = 200
+        status, cookie = 200, None
         try:
             if not self.is_local():
                 self.reply(403, "text/plain", b"Local requests only")
@@ -190,7 +209,18 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n))
             if not isinstance(body, dict):
                 raise ValueError("Требуется объект")
-            result = api(urlsplit(self.path).path, body)
+            path = urlsplit(self.path).path
+            if path.startswith("/api/qwen/") and qwen_chat_enabled():
+                from llm_lab.integration import chat_api
+                action = path.removeprefix("/api/qwen/")
+                try:
+                    owner, cookie = chat_api.request_owner(self, create=action == "new")
+                except PermissionError as error:
+                    self.reply(403, "application/json; charset=utf-8", as_json({"error": str(error)}).encode())
+                    return
+                result = chat_api.route(action, owner, body)
+            else:
+                result = api(path, body)
         except sqlite3.Error:
             status = 503
             result = {"error": "Локальное хранилище временно недоступно."}
@@ -201,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(error, ValueError)
                 else "Проверьте поля запроса и входные данные"
             }
-        self.reply(status, "application/json; charset=utf-8", as_json(result).encode())
+        self.reply(status, "application/json; charset=utf-8", as_json(result).encode(), cookie=cookie if status == 200 else None)
 
     def log_message(self, format, *args):
         pass
@@ -245,6 +275,9 @@ def main():
         overview()
         with ai_store.database():
             pass
+        if qwen_chat_enabled():
+            from llm_lab.integration import chat_api
+            chat_api.install()
         print(f"ParadiigmaMGR: http://127.0.0.1:{args.port}", flush=True)
         with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as httpd:
             from pm import collection

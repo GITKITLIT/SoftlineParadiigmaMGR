@@ -222,6 +222,9 @@ TOOLS = {
 FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect", "compare_history", "search_history", "competitor_history", "product_history")
 
 
+EFFECT_TOOLS = {"plan": "sales", "review": "effect"}
+
+
 class InvestigationContext:
     """Publish evidence only after its tool runs. Workbook tools share one snapshot."""
 
@@ -235,6 +238,8 @@ class InvestigationContext:
         self.load_snapshot = snapshot_loader or (lambda: overview(for_analysis=True))
         self.snapshot = None
         self.corpus = None
+        effect_intent = request.get("effect_intent")
+        self.effect_tool = EFFECT_TOOLS.get(effect_intent) if isinstance(effect_intent, str) else None
         self.evidence = {}
         self.seen_text = set()
         self.limits = []
@@ -288,6 +293,17 @@ class InvestigationContext:
                 "status": "disabled",
                 "reason": "no_public_scope" if not request.get("web") else "configuration_disabled",
             }
+
+        if self.memory_scope.get("only_history") is True:
+            for tool, key in (("sales", "sales"), ("funnel", "funnel"), ("releases", "release"),
+                              ("backlog", "backlog"), ("research", "research"),
+                              ("competitors", "competitor_local"), ("metrika", "metrika"),
+                              ("public_competitors", "competitor_web")):
+                if self.available.pop(tool, None):
+                    self.statuses[key] = {"status": "disabled", "reason": "historical_chat_scope"}
+        if self.effect_tool:
+            self.available = {key: description for key, description in self.available.items()
+                              if key == self.effect_tool}
 
     def get_snapshot(self):
         if self.snapshot is None:
@@ -388,12 +404,24 @@ class InvestigationContext:
             partial = rate is None or values.get("days") != values.get("total")
             incomplete |= partial
             self.add(entry(
-                f"reach:{segment}", "funnel", "Выбор опции", mode=self.mode, unit="percent",
+                f"reach:{segment}", "funnel", snapshot.get("reach_label", "Выбор опции"), mode=self.mode, unit="percent",
                 metric="cfg_reach_rate", filter={"segment": segment},
                 period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
                 quality="incomplete" if partial else "observed",
                 values=values | {"rate": rate}, source_group="store_funnel",
             ))
+        for segment, coverage in snapshot.get("basket_coverage", {}).items():
+            incomplete |= coverage["days"] != coverage["total"]
+            self.add(entry(
+                f"basket:{segment}", "funnel", "Добавление в корзину", mode=self.mode, unit="percent",
+                metric="cfg_add_to_cart_rate", filter={"segment": segment},
+                period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
+                values={**coverage, "rate": None}, quality="incomplete", source_group="store_funnel",
+                text=(f"{segment}: в окне нет наблюдений события для продукта." if not coverage["days"]
+                      else f"{segment}: доступно покрытие события, конверсия по этому окну не рассчитана."),
+            ))
+            if not coverage["days"]:
+                self.limits.append("Конверсия в корзину для выбранного продукта и устройства не измерена в выгрузке.")
         return ("missing", "no_segments") if not reach else ("partial", "incomplete_coverage") if incomplete else ("ok", None)
 
     def releases(self):
@@ -402,7 +430,7 @@ class InvestigationContext:
         launch = snapshot.get("launch")
         if launch:
             self.add(entry("release:current", "release", current or "Релиз",
-                           mode=self.mode, observed_at=launch, source_group="release_log",
+                           snapshot.get("release_title", ""), mode=self.mode, observed_at=launch, source_group="release_log",
                            values={"related_task": snapshot.get("release_task")}))
         cfg = snapshot["config"]
         begin, end = day(cfg["before_start"]), day(cfg["after_end"])
@@ -442,6 +470,18 @@ class InvestigationContext:
                                mode=self.mode, values={"status": row.get("status")}, source_group="backlog"))
             if len(self.matches) >= 4:
                 break
+        from .ai_store import task_list
+        for task in task_list():
+            if len(self.matches) >= 8:
+                break
+            if task["data_mode"] != self.mode or task["decision"] != "accept":
+                continue
+            if not terms & tokens(task["title"] + " " + task.get("verification", "")):
+                continue
+            item = {"id": task["id"], "title": task["title"], "status": "Согласована"}
+            self.matches.append(item)
+            self.add(entry(f"backlog:approved:{len(self.matches)}", "backlog", item["id"], item["title"],
+                           mode=self.mode, values={"status": item["status"]}, source_group="backlog"))
         return ("ok", None) if self.matches else ("missing", "no_matching_task")
 
     def research(self, competitors):
@@ -523,14 +563,19 @@ class InvestigationContext:
             return "missing", "no_accepted_task"
         review = task.get("latest_review")
         plan = task["effect_plan"]
-        values = {"baseline": plan["baseline"], "target": plan["target"],
-                  "status": review["status"] if review else "waiting_for_data"}
+        values = {"baseline": plan["baseline"], "target": plan["target"], "plan": plan,
+                  "status": review["status"] if review else "waiting_for_data",
+                  "recommendation": review.get("recommendation") if review else "Дождаться четырёх полных недель."}
         if review:
             values.update(review.get("measurement", {}))
+            for key in ("control_adjusted_change_pp", "change_from_baseline", "limitations", "external_factors"):
+                if key in review:
+                    values[key] = review[key]
+        waiting = values["status"] == "waiting_for_data"
         self.add(entry("task:effect", "effect", task["title"], task["hypothesis"],
                        mode=task["data_mode"], values=values, source_group="effect_review",
-                       quality="observed" if review else "incomplete"))
-        return ("ok", None) if review else ("partial", "waiting_for_data")
+                       quality="incomplete" if waiting else "observed"))
+        return ("partial", "waiting_for_data") if waiting else ("ok", None)
 
 
     def compare_history(self):
@@ -575,6 +620,7 @@ class InvestigationContext:
             self.add(entry(f"memory:decision:{index}", "memory_context", "Предыдущее решение",
                            item.get("proposal") or item.get("summary") or "", mode=self.mode,
                            quality="historical_context", locator={"run_id": item["run_id"]},
+                           observed_at=item["created"][:10],
                            values={"decision": item["decision"], "reason": item["decision_reason"],
                                    "effect": item["effect"]}))
         return ("ok", None) if result["documents"] or result["decisions"] else ("missing", "no_related_history")
@@ -586,7 +632,8 @@ class InvestigationContext:
         for row in rows[:5]:
             self.add(entry(f"memory:offer:{row['observation_id']}", "historical_competitor", row["competitor"],
                            mode=self.mode, quality=row["quality"], locator=row["reference"],
-                           observed_at=row["published"], unit=row["currency"],
+                           observed_at=row["observed"], published_at=row["published"],
+                           unit=row["currency"], terms=row["terms"],
                            source_group=f"public:{row['competitor']}", values={"before": row["before"], "after": row["after"]},
                            memory_observation_id=row["observation_id"]))
         return ("ok", None) if rows else ("missing", "no_comparable_price_changes")
@@ -601,5 +648,7 @@ class InvestigationContext:
             self.add(entry(f"memory:release:{row['observation_id']}", "historical_release", row["id"],
                            mode=self.mode, observed_at=row["date"], quality="observed",
                            source_group="release_log", memory_observation_id=row["observation_id"],
-                           values={"delta": numbers.get("delta"), "interpretation": "descriptive_only"}))
+                           unit=numbers.get("unit"),
+                           values={"before": numbers.get("before"), "after": numbers.get("after"),
+                                   "delta": numbers.get("delta"), "interpretation": "descriptive_only"}))
         return ("ok", None) if result["releases"] else ("missing", "no_historical_releases")

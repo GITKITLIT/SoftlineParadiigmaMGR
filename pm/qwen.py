@@ -154,7 +154,11 @@ def _infer(query, evidence, opener, planning, facts):
                                    "evidence_ids", "contradictions", "missing") if key in row}
         for row in facts if set(row["evidence_ids"]) <= by_id.keys()
     ][:5]
-    data = json.dumps({"question": query, "evidence": batch, "server_observations": checked_facts}, ensure_ascii=False)
+    payload = {"question": query, "evidence": batch, "server_observations": checked_facts}
+    if os.getenv("PM_QWEN_QUALITATIVE", "").lower() == "true":
+        from llm_lab.synthesis import qualitative_input
+        payload = qualitative_input(query, batch, checked_facts)
+    data = json.dumps(payload, ensure_ascii=False)
     deadline = time.monotonic() + 80
     for attempt in range(2):
         messages = [{"role": "system", "content": prompt},
@@ -262,6 +266,12 @@ def planner():
                 "«Почему упали заказы?» без наблюдений -> {\"action\":\"sales\"}. "
                 "«Что изменил выпуск?» -> {\"action\":\"releases\"}."
             )
+            if "public_competitors" in available:
+                system += (
+                    " Для явного запроса публичных сведений о ценах, условиях или конкурентах "
+                    "выбери public_competitors в начале. Этот инструмент работает только с выбранным "
+                    "публичным каталогом. Локальный архив не заменяет публичную проверку."
+                )
             payload = {"question": query, "available_tools": available, "evidence": batch, "completed": recent_tools}
             request = Request(url, data=json.dumps({
                 "model": model, "temperature": 0, "max_tokens": 120, "stream": False,
@@ -306,7 +316,7 @@ def bounded_evidence(evidence, budget, max_excerpt):
             payload = {key: item[key] for key in (
                 "id", "kind", "ref", "text", "quality", "data_mode", "source_group",
                 "observed_at", "retrieved_at", "metric", "period", "filter", "unit", "locator",
-                "topic", "values", "freshness",
+                "topic", "values", "freshness", "competitor", "offer",
             ) if item.get(key) is not None}
             payload["text"] = payload.get("text", "")[:max_excerpt]
             size = len(json.dumps(payload, ensure_ascii=False).encode("utf8")) + 2

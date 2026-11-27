@@ -191,7 +191,7 @@ def primary_signatures(evidence):
         and item.get("quality") not in {"reported", "derived", "incomplete", "snippet"}}
 
 
-def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=False):
+def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=False, product=None):
     require_mode(mode)
     words = query.casefold().split()[:8]
     with ai_store.database() as db:
@@ -207,6 +207,10 @@ def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=Fals
         for row in rows:
             report = json.loads(row["report"])
             task = json.loads(row["body"]) if row["body"] else {}
+            primary = next((item.get("ref") for item in report.get("evidence", [])
+                            if item.get("id") == "orders:0"), None)
+            if product and product not in (primary, task.get("segment")):
+                continue
             context = report.get("request_context", {}).get("query", "")
             text = " ".join([context, report.get("summary", ""), task.get("title", ""), task.get("hypothesis", "")])
             if words and not any(word in text.casefold() for word in words):
@@ -245,7 +249,7 @@ def search(request):
     with ai_store.database() as db:
         documents = (memory.find_fragments(db, query, product=product, kind=request.get("kind"),
                                            start=start, end=end) if mode == "local" else [])
-    return {"documents": documents, "decisions": past_decisions(mode, query, start=start, end=end)}
+    return {"documents": documents, "decisions": past_decisions(mode, query, start=start, end=end, product=product)}
 
 
 def backup_status():
@@ -303,7 +307,7 @@ def product_history(request):
                     facts["comparison"] = {
                         "before": first, "after": last,
                         "delta": last["value"] - first["value"] if first["status"] == last["status"] == "ok" else None,
-                        "interpretation": "descriptive_only",
+                        "unit": series["unit"], "interpretation": "descriptive_only",
                     }
                 result.append(facts)
     return {"product": name, "releases": sorted(result, key=lambda item: item["date"], reverse=True)[:25]}

@@ -119,10 +119,11 @@ def compile_book(path, config=None, source="Локальная выгрузка"
                 )
             )
         reach = {}
+        metric_rows = list(records(book["Метрики_данные"]))
         for device in ("desktop", "mobile"):
             seen = set()
             num = den = 0
-            for r in records(book["Метрики_данные"]):
+            for r in metric_rows:
                 if (r["metric_id"], r["product"], r["segment"]) != (
                     "cfg_reach_rate",
                     case["reach_product"],
@@ -155,6 +156,15 @@ def compile_book(path, config=None, source="Локальная выгрузка"
             backlog=dict(id=case["backlog_id"], title=task["title"], status=task["status"]),
         )
         if for_analysis:
+            basket = {}
+            for device in ("desktop", "mobile"):
+                observed = {
+                    day(row["date"]) for row in metric_rows
+                    if (row["metric_id"], row["product"], row["segment"]) ==
+                    ("cfg_add_to_cart_rate", case["reach_product"], device)
+                    and row.get("value") is not None and rs <= day(row["date"]) <= re
+                }
+                basket[device] = {"days": len(observed), "total": (re - rs).days + 1}
             snapshots = []
             for key, row in releases.items():
                 try:
@@ -163,11 +173,14 @@ def compile_book(path, config=None, source="Локальная выгрузка"
                     continue
                 if start <= released <= partial and key and key != case["release_id"]:
                     snapshots.append(dict(id=str(key), date=released.isoformat(),
-                                          title=str(row.get("title") or row.get("release_name") or "")[:180],
+                                          title=str(row.get("title") or row.get("release_name") or row.get("description") or "")[:180],
                                           related_task=row.get("related_task_ids")))
             snapshots.sort(key=lambda row: (abs(day(row["date"]) - launch), row["id"]))
             snapshot.update(
                 channel=case["channel"],
+                release_title=str(release.get("title") or release.get("release_name") or release.get("description") or "")[:240],
+                reach_label="Визиты с конфигуратором",
+                basket_coverage=basket,
                 release_history=snapshots[:12],
                 backlog_history=[
                     {"id": str(key), "title": str(row.get("title") or "")[:180], "status": row.get("status")}

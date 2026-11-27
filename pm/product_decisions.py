@@ -8,6 +8,9 @@ GENERIC_TERMS = tokens("проверить задача сделать гипо�
 def task_proposals(hypotheses, matches, evidence, core, plan, *, backlog_status):
     proposals = []
     by_id = {item["id"]: item for item in evidence}
+    delta = (core or {}).get("values", {}).get("delta")
+    problem_description = (f'{core["ref"]}: изменение среднего индекса заказов {delta:+.1f}%.'
+                           if delta is not None else None)
     for i, item in enumerate(hypotheses):
         terms = tokens(item["problem"] + " " + item["verify"]) - GENERIC_TERMS
         cited = {by_id[ref]["ref"] for ref in item["evidence_ids"]
@@ -20,6 +23,7 @@ def task_proposals(hypotheses, matches, evidence, core, plan, *, backlog_status)
 
         decision = dict(
             id=f"proposal-{i + 1}", title=item["problem"], hypothesis=item["cause"],
+            problem_description=problem_description or item["problem"],
             verification=item["verify"], expected=item["expected"], risks=item["risk"],
             segment=core["ref"] if core else "Не выбран",
             evidence_ids=item["evidence_ids"], contradictions=item["contradictions"],

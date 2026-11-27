@@ -37,6 +37,15 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     statuses, limits, matches = context.statuses, context.limits, context.matches
     gathered = time.perf_counter() - started
     findings = correlate(evidence)
+    missing_cart = [item["id"] for item in evidence
+                    if item.get("metric") == "cfg_add_to_cart_rate" and item["values"]["days"] == 0]
+    if missing_cart:
+        findings.append(dict(
+            relation="cart_measurement_gap", statement_type="fact", confidence="high",
+            text="В выбранном окне отсутствуют наблюдения добавления в корзину для продукта и устройства.",
+            evidence_ids=missing_cart, contradictions=[], missing=["Фактическое прохождение шага покупки"],
+            checks=["Проверить появление выбранной позиции в корзине и отдельно сверить запись события аналитики."],
+        ))
     comparison = next((item for item in evidence if item["id"] == "memory:comparison"), None)
     if comparison:
         related = [item["id"] for item in evidence if item["kind"] == "historical_metric"]
@@ -57,7 +66,7 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         if item["kind"] == "funnel" and item["values"]["rate"] is not None:
             values = item["values"]
             findings.append(dict(
-                text=f'{item["filter"]["segment"]} · выбор опции {values["rate"]:.1f}%, покрытие {values["days"]}/{values["total"]} дней',
+                text=f'{item["filter"]["segment"]} · {item["ref"]}: {values["rate"]:.1f}%, покрытие {values["days"]}/{values["total"]} дней',
                 evidence_ids=[item["id"]], contradictions=[],
                 missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
                 confidence="low" if item["quality"] == "incomplete" else "medium",
@@ -70,6 +79,12 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     skip_synthesis = measurement_question and (delta is None or delta >= 0) and not any(
         keyword in query.casefold() for keyword in ("почему", "гипотез", "конкурент", "интервью")
     )
+    market_question = query.casefold()
+    compare_offers = (
+        any(item["kind"] == "competitor_web" for item in evidence)
+        and any(word in market_question for word in ("сопоставим", "сравни цен", "сравни условия"))
+        and not any(word in market_question for word in ("почему", "гипотез", "что проверить"))
+    )
     if termination == "out_of_scope":
         evidence, findings, matches, limits = [], [], [], []
         core, control = None, None
@@ -77,6 +92,15 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
     elif skip_synthesis:
         status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
+    elif context.effect_tool:
+        reason = "effect_plan" if context.effect_tool == "sales" else "stored_effect_review"
+        status, hypotheses, usage = "not_needed", [], {}
+    elif compare_offers:
+        status, hypotheses, usage, reason = "not_needed", [], {}, "competitor_measurement"
+    elif context.memory_scope.get("only_history") is True and not any(
+        keyword in query.casefold() for keyword in ("почему сниз", "почему вырос", "новую гипотез", "как проверить")
+    ):
+        status, hypotheses, usage, reason = "not_needed", [], {}, "historical_lookup"
     elif comparison and not any(word in query.casefold() for word in ("почему", "гипотез", "как проверить")):
         status, hypotheses, usage, reason = "not_needed", [], {}, "historical_measurement"
     elif infer is not None:
@@ -162,10 +186,16 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
     )]
     elapsed = time.perf_counter() - started
+    measurement_check = next((row["checks"] for row in findings
+                              if row.get("relation") == "cart_measurement_gap"), [])
+    measurement_check = measurement_check if any(
+        item["kind"] == "orders" and (item["values"]["delta"] or 0) < 0 for item in evidence
+    ) else []
     report = dict(
         run_id=uuid4().hex, llm_status=status, data_mode=mode, sources_status=statuses,
         evidence=evidence, summary=summary, findings=findings, hypotheses=hypotheses,
-        recommended_actions=[h["verify"] for h in hypotheses] or ["Проверить полноту входных данных."],
+        recommended_actions=measurement_check + [h["verify"] for h in hypotheses]
+        or ["Проверить полноту входных данных."],
         backlog_matches=matches, proposed_tasks=proposals, effect_plan=effect_plan, limitations=limits,
         trace=[dict(step="collect", seconds=round(gathered, 3)),
                *trace,

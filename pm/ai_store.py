@@ -162,7 +162,7 @@ def recent():
         ]
 
 
-def decide(request):
+def decide(request, *, source_report=None, edited=None):
     import hashlib
     from uuid import uuid4
     from .analytics import finite
@@ -198,7 +198,9 @@ def decide(request):
         stop_if_below = finite(stop_if_below)
         if action != "accept" or stop_if_below > target:
             raise ValueError("Порог остановки должен быть не выше цели")
-    report = run(run_id)
+    report = run(run_id) if source_report is None else source_report
+    if report["run_id"] != run_id:
+        raise ValueError("Проверьте идентификатор расследования")
     proposal = next((p for p in report["proposed_tasks"] if p["id"] == proposal_id), None)
     if proposal is None:
         raise ValueError("Предложение не найдено")
@@ -212,6 +214,8 @@ def decide(request):
         identity.extend([stop_if_below, guards])
     if reason:
         identity.append({"reason": reason})
+    if edited:
+        identity.append({"edited": edited})
     fingerprint = hashlib.sha256(dumps(identity).encode()).hexdigest()
     with database() as db:
         previous = db.execute("SELECT fingerprint, task_id FROM idempotency WHERE key=?", (key,)).fetchone()
@@ -223,7 +227,12 @@ def decide(request):
             if record["fingerprint"] != fingerprint:
                 raise ValueError("Предложение уже рассмотрено")
         else:
-            record = proposal | dict(
+            if source_report is not None:
+                from .memory import record_investigation, safe_data
+                shared = safe_data(source_report)
+                db.execute("INSERT INTO runs VALUES (?, ?, ?)", (run_id, now(), dumps(shared)))
+                record_investigation(db, shared)
+            record = proposal | (edited or {}) | dict(
                 id=uuid4().hex, run_id=run_id, proposal_id=proposal_id, decision=action,
                 effect_plan=plan | {"target": target, "control_min": guardrail, "stop_if_below": stop_if_below,
                                     "guardrail_metrics": guards},

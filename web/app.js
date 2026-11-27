@@ -517,6 +517,8 @@ $("#infer").onclick = async (e) => {
   }
 };
 function renderInvestigation(report) {
+  const isRelease = report?.evidence.some((item) => item.id === "release:current" && item.ref === data.release_id);
+  if (isRelease) document.dispatchEvent(new CustomEvent("qwen-release-report", {detail: report.run_id}));
   const container = $("#runDetails");
   container.replaceChildren();
   text("#runSummary", report ? report.summary : "Собираем доказательства…");
@@ -791,6 +793,11 @@ async function reloadRuns() {
         if (item.latest_review) status.textContent = effectReviewText(item.latest_review);
         row.append(label, status);
       }
+      if (window.qwenAskWithScope && item.decision === "accept") {
+        const ask = node("button", "Обсудить эффект в чате");
+        ask.onclick = () => window.qwenAskWithScope("Какой эффект показала согласованная задача?", {task_id: item.id});
+        row.append(ask);
+      }
       tasks.append(row);
     }
   } catch (error) {
@@ -1064,6 +1071,8 @@ async function refreshMemory() {
     for (const item of listing.series.filter((row) => row.aggregation !== "snapshot")) {
       const option = node("option", [item.product, item.metric, item.unit, item.segment].join(" · "));
       option.value = item.id;
+      option.dataset.product = item.product;
+      option.dataset.stream = item.stream;
       select.append(option);
     }
   } catch (error) {
@@ -1153,6 +1162,59 @@ $("#memoryAsk").onclick = () => {
   $("#agent").scrollIntoView();
   $("#infer").click();
 };
+$("#memoryChat").onclick = () => {
+  if (!$("#memoryCompare").reportValidity()) return;
+  const options = memoryComparison();
+  window.qwenAskWithScope("Сравни выбранные исторические периоды", {memory: {mode: options.mode, compare: options}});
+};
+$("#memorySearchChat").onclick = () => {
+  const form = $("#memorySearch");
+  if (!form.reportValidity()) return;
+  const {query, ...filters} = values(form);
+  const search = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+  window.qwenAskWithScope(query, {memory: {mode: memoryMode(), search}});
+};
+function historicalProductScope() {
+  const {series, afterStart, afterEnd} = $("#memoryCompare").elements;
+  if (![series, afterStart, afterEnd].every((field) => field.reportValidity())) return null;
+  return {series_id: Number(series.value), mode: memoryMode(), period: [afterStart.value, afterEnd.value],
+    ...series.selectedOptions[0].dataset};
+}
+$("#memoryReleaseChat").onclick = () => {
+  const scope = historicalProductScope();
+  if (!scope) return;
+  if (scope.stream !== "sales") {
+    text("#memoryResult", "Для сравнения релизов выберите исторический ряд продаж.");
+    return;
+  }
+  const {series_id, mode, period, product} = scope;
+  window.qwenAskWithScope("Сравни последствия релизов в выбранном периоде", {memory: {
+    mode, product: {product, period, series_id},
+  }});
+};
+$("#memoryPriceChat").onclick = () => {
+  const scope = historicalProductScope();
+  if (!scope) return;
+  const {mode, period, product} = scope;
+  window.qwenAskWithScope("Как менялись цены конкурентов в выбранном периоде?", {memory: {
+    mode, competitors: {product, period},
+  }});
+};
+window.qwenCore = {
+  releaseId: () => data.release_id,
+  scope() {
+    const scope = {config: data.config};
+    if ($("#includeMeter").checked) {
+      scope.metrika = $("#compareMeter").checked ? {compare: true} : values($("#meter"));
+    }
+    if ($("#publicProduct").value) {
+      const selected = (id) => Array.from($(id).selectedOptions, (item) => item.value);
+      scope.web = {product: $("#publicProduct").value, domains: selected("#publicDomains"), topics: selected("#publicTopics")};
+    }
+    return scope;
+  },
+};
+document.addEventListener("qwen-backlog-updated", () => $("#reloadRuns").click());
 $("#memoryCompetitors").onclick = async () => {
   try {
     const input = memoryComparison();

@@ -60,7 +60,18 @@ def investigate(context, decide=None, *, clock=time.monotonic, progress=None):
         trace.append(dict(step="tool", tool=name, arguments=arguments, purpose=purpose, actor=actor,
                           seconds=round(clock() - started, 3), **result))
 
+    effect_tool = getattr(context, "effect_tool", None)
+    if effect_tool == "effect" and effect_tool in context.available:
+        execute(effect_tool, {}, "stored_effect_review", "server")
+        return trace, usage, "sources_exhausted"
     required = requested_tools(context.query) & context.available.keys()
+    if effect_tool in context.available:
+        required.add(effect_tool)
+    scope = getattr(context, "memory_scope", None)
+    if isinstance(scope, dict) and scope.get("only_history") is True:
+        tools = {"compare": "compare_history", "search": "search_history",
+                 "competitors": "competitor_history", "product": "product_history"}
+        required |= {tools[key] for key in tools.keys() & scope.keys()} & context.available.keys()
     if decide:
         for _ in range(MAX_MODEL_STEPS):
             if clock() >= end:

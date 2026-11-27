@@ -21,13 +21,13 @@ def _prune():
             del JOBS[key]
 
 
-def start(request, analyze=investigation.analyze):
+def start(request, analyze=investigation.analyze, *, private=False):
     if not SLOTS.acquire(blocking=False):
         raise ValueError("Два расследования уже выполняются. Попробуйте после завершения.")
     identifier = uuid4().hex
     with LOCK:
         _prune()
-        JOBS[identifier] = {"status": "running", "phases": [], "updated": monotonic()}
+        JOBS[identifier] = {"status": "running", "phases": [], "updated": monotonic(), "private": private}
 
     def progress(event):
         safe = {name: event[name] for name in ("step", "tool", "actor", "status") if name in event}
@@ -61,12 +61,12 @@ def start(request, analyze=investigation.analyze):
     return {"job_id": identifier}
 
 
-def status(identifier):
+def status(identifier, *, private=False):
     if not isinstance(identifier, str) or len(identifier) != 32:
         raise ValueError("Некорректный ID запуска")
     with LOCK:
         _prune()
         row = JOBS.get(identifier)
-        if not row:
+        if not row or row["private"] != private:
             raise ValueError("Временный статус запуска больше недоступен")
-        return {name: value for name, value in row.items() if name != "updated"}
+        return {name: value for name, value in row.items() if name not in {"updated", "private"}}

@@ -1,0 +1,43 @@
+#qwen-fab {
+  position: fixed;
+  z-index: 20;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  width: 3.4rem;
+  height: 3.4rem;
+  padding: 0;
+  border-radius: 50%;
+  touch-action: none;
+  cursor: grab;
+}
+#qwen-panel {
+  position: fixed;
+  z-index: 21;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  width: min(29rem, calc(100vw - 2rem));
+  max-height: min(43rem, calc(100dvh - 2rem));
+  background: var(--paper, #fff);
+  color: var(--text, #161618);
+  border: 1px solid var(--line, #c9c9ce);
+  border-radius: 1rem;
+  box-shadow: 0 0.75rem 2.75rem #17203430;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+#qwen-panel[hidden], #qwen-fab[hidden] { display: none; }
+#qwen-heading { font-size: 1.15rem; margin: 0; }
+#qwen-panel p { margin: 0.35rem 0; }
+#qwen-panel label { margin: 0; }
+.qwen-bar { display: flex; align-items: end; justify-content: space-between; gap: 0.5rem; }
+.qwen-bar label { flex: 1; min-width: 0; }
+.qwen-bar select { max-width: 100%; }
+#qwen-log { overflow: auto; min-height: 3rem; overflow-wrap: anywhere; }
+#qwen-log article { border-top: 1px solid var(--line, #ddd); padding: 0.65rem 0; }
+#qwen-log .qwen-user { font-weight: 650; white-space: pre-wrap; }
+#qwen-panel details { margin: 0.4rem 0; }
+#qwen-panel details p { white-space: pre-wrap; }
+#qwen-question { resize: vertical; max-height: 9rem; }
+#qwen-release { margin: 1rem 0; }

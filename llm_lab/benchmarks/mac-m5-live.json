@@ -1,0 +1,738 @@
+{
+  "mode": "live",
+  "data": "synthetic",
+  "samples": [
+    {
+      "id": "drop",
+      "wall_seconds": 18.554,
+      "analysis_seconds": 18.553,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "competitors",
+        "research",
+        "releases"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 9,
+      "source_groups": 6,
+      "usage": {
+        "completion_tokens": 401,
+        "prompt_tokens": 8394,
+        "total_tokens": 8795
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_decline": true,
+        "emits_verifiable_hypotheses": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "no_anomaly",
+      "wall_seconds": 1.173,
+      "analysis_seconds": 1.172,
+      "llm_status": "not_needed",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "sales"
+      ],
+      "hypotheses": 0,
+      "evidence_count": 3,
+      "source_groups": 2,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1326,
+        "total_tokens": 1342
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "no_false_decline": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "nearby_releases",
+      "wall_seconds": 16.394,
+      "analysis_seconds": 16.392,
+      "llm_status": "ok",
+      "termination": "insufficient_evidence",
+      "model_tools": [
+        "releases",
+        "research",
+        "sales",
+        "competitors",
+        "funnel"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 8,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 353,
+        "prompt_tokens": 6931,
+        "total_tokens": 7284
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "additional_release": true,
+        "causality_qualified": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "tracking_gap",
+      "wall_seconds": 12.469,
+      "analysis_seconds": 12.467,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "funnel",
+        "research",
+        "backlog",
+        "sales",
+        "releases"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 9,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 209,
+        "prompt_tokens": 7753,
+        "total_tokens": 7962
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "reach_is_not_checkout": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "missing_weeks",
+      "wall_seconds": 6.507,
+      "analysis_seconds": 6.506,
+      "llm_status": "not_needed",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "releases",
+        "competitors",
+        "research"
+      ],
+      "hypotheses": 0,
+      "evidence_count": 8,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 51,
+        "prompt_tokens": 6211,
+        "total_tokens": 6262
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "missing_delta": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "unequal_periods",
+      "wall_seconds": 12.231,
+      "analysis_seconds": 12.23,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "competitors",
+        "research",
+        "releases",
+        "backlog"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 8,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 196,
+        "prompt_tokens": 7908,
+        "total_tokens": 8104
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "different_windows_disclosed": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "no_control",
+      "wall_seconds": 14.62,
+      "analysis_seconds": 14.618,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "competitors",
+        "releases",
+        "research"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 7,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 332,
+        "prompt_tokens": 6569,
+        "total_tokens": 6901
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "no_control": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "contradiction",
+      "wall_seconds": 17.031,
+      "analysis_seconds": 17.029,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "metrika",
+        "sales",
+        "funnel",
+        "competitors",
+        "releases",
+        "research"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 11,
+      "source_groups": 6,
+      "usage": {
+        "completion_tokens": 255,
+        "prompt_tokens": 9951,
+        "total_tokens": 10206
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "retains_contradictory_sources": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "stale_research",
+      "wall_seconds": 14.081,
+      "analysis_seconds": 14.08,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "competitors",
+        "research",
+        "funnel",
+        "sales",
+        "releases",
+        "backlog"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 11,
+      "source_groups": 6,
+      "usage": {
+        "completion_tokens": 319,
+        "prompt_tokens": 7839,
+        "total_tokens": 8158
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "qualified_source_age": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "incomparable_offers",
+      "wall_seconds": 6.987,
+      "analysis_seconds": 6.985,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "public_competitors"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 4,
+      "source_groups": 4,
+      "usage": {
+        "completion_tokens": 168,
+        "prompt_tokens": 3021,
+        "total_tokens": 3189
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "unverified_snippet_does_not_become_offer": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "search_unavailable",
+      "wall_seconds": 4.555,
+      "analysis_seconds": 4.554,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "public_competitors"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 2,
+      "source_groups": 2,
+      "usage": {
+        "completion_tokens": 150,
+        "prompt_tokens": 2328,
+        "total_tokens": 2478
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "provider_failure_disclosed": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "metrika_unavailable",
+      "wall_seconds": 0.728,
+      "analysis_seconds": 0.726,
+      "llm_status": "unavailable",
+      "termination": "insufficient_evidence",
+      "model_tools": [
+        "metrika"
+      ],
+      "hypotheses": 0,
+      "evidence_count": 0,
+      "source_groups": 0,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 966,
+        "total_tokens": 982
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "counter_failure_disclosed": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "model_unavailable",
+      "wall_seconds": 0.022,
+      "analysis_seconds": 0.017,
+      "llm_status": "unavailable",
+      "termination": "decision_unavailable",
+      "model_tools": [],
+      "hypotheses": 2,
+      "evidence_count": 7,
+      "source_groups": 5,
+      "usage": {},
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "explicit_fallback": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "simple_chat",
+      "wall_seconds": 3.691,
+      "analysis_seconds": 3.691,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "backlog"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 1,
+      "source_groups": 1,
+      "usage": {
+        "completion_tokens": 131,
+        "prompt_tokens": 1573,
+        "total_tokens": 1704
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "observed_backlog": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "follow_up",
+      "wall_seconds": 14.184,
+      "analysis_seconds": 14.184,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "funnel",
+        "research",
+        "competitors",
+        "sales",
+        "releases"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 7,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 292,
+        "prompt_tokens": 6922,
+        "total_tokens": 7214
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "product_switch",
+      "wall_seconds": 4.387,
+      "analysis_seconds": 4.387,
+      "llm_status": "not_needed",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "compare_history",
+        "competitors",
+        "search_history"
+      ],
+      "hypotheses": 0,
+      "evidence_count": 5,
+      "source_groups": 3,
+      "usage": {
+        "completion_tokens": 35,
+        "prompt_tokens": 3721,
+        "total_tokens": 3756
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_history": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "history",
+      "wall_seconds": 5.339,
+      "analysis_seconds": 5.339,
+      "llm_status": "not_needed",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "compare_history",
+        "competitors",
+        "search_history",
+        "research"
+      ],
+      "hypotheses": 0,
+      "evidence_count": 6,
+      "source_groups": 4,
+      "usage": {
+        "completion_tokens": 33,
+        "prompt_tokens": 3892,
+        "total_tokens": 3925
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_history": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "duplicate",
+      "wall_seconds": 11.897,
+      "analysis_seconds": 11.895,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "backlog",
+        "releases",
+        "research",
+        "competitors",
+        "sales"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 9,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 235,
+        "prompt_tokens": 6862,
+        "total_tokens": 7097
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "related_task_retrieved": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "failed_effect",
+      "wall_seconds": 16.139,
+      "analysis_seconds": 16.139,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "effect",
+        "sales",
+        "funnel",
+        "releases",
+        "competitors",
+        "research",
+        "backlog"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 8,
+      "source_groups": 6,
+      "usage": {
+        "completion_tokens": 305,
+        "prompt_tokens": 8755,
+        "total_tokens": 9060
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "simulation_not_observation": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "out_of_scope",
+      "wall_seconds": 0.004,
+      "analysis_seconds": 0.004,
+      "llm_status": "not_needed",
+      "termination": "out_of_scope",
+      "model_tools": [],
+      "hypotheses": 0,
+      "evidence_count": 0,
+      "source_groups": 0,
+      "usage": {},
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "no_data_lookups": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "draft",
+      "wall_seconds": 15.23,
+      "analysis_seconds": 15.23,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "releases",
+        "research",
+        "backlog",
+        "competitors"
+      ],
+      "hypotheses": 1,
+      "evidence_count": 9,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 198,
+        "prompt_tokens": 8369,
+        "total_tokens": 8567
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_decline": true,
+        "emits_verifiable_hypotheses": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "monitor",
+      "wall_seconds": 21.841,
+      "analysis_seconds": 21.835,
+      "llm_status": "ok",
+      "termination": "sources_exhausted",
+      "model_tools": [
+        "sales",
+        "funnel",
+        "competitors",
+        "research",
+        "releases"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 9,
+      "source_groups": 6,
+      "usage": {
+        "completion_tokens": 402,
+        "prompt_tokens": 8366,
+        "total_tokens": 8768
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_decline": true,
+        "emits_verifiable_hypotheses": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    },
+    {
+      "id": "release_brief",
+      "wall_seconds": 17.104,
+      "analysis_seconds": 17.102,
+      "llm_status": "ok",
+      "termination": "enough_evidence",
+      "model_tools": [
+        "releases",
+        "research",
+        "funnel",
+        "sales",
+        "competitors"
+      ],
+      "hypotheses": 2,
+      "evidence_count": 7,
+      "source_groups": 5,
+      "usage": {
+        "completion_tokens": 323,
+        "prompt_tokens": 6530,
+        "total_tokens": 6853
+      },
+      "checks": {
+        "citations_resolve": true,
+        "hypotheses_testable": true,
+        "only_allowlisted_sources": true,
+        "correct_decline": true,
+        "emits_verifiable_hypotheses": true,
+        "context": true,
+        "brief_persistence": true
+      }
+    }
+  ],
+  "concurrent": {
+    "clients": 2,
+    "wall_seconds": 10.04,
+    "samples": [
+      {
+        "id": "simple_chat",
+        "wall_seconds": 8.038,
+        "analysis_seconds": 8.038,
+        "llm_status": "ok",
+        "termination": "enough_evidence",
+        "model_tools": [
+          "backlog"
+        ],
+        "hypotheses": 1,
+        "evidence_count": 1,
+        "source_groups": 1,
+        "usage": {
+          "completion_tokens": 131,
+          "prompt_tokens": 1573,
+          "total_tokens": 1704
+        },
+        "checks": {
+          "citations_resolve": true,
+          "hypotheses_testable": true,
+          "only_allowlisted_sources": true,
+          "observed_backlog": true,
+          "context": true,
+          "brief_persistence": true
+        }
+      },
+      {
+        "id": "draft",
+        "wall_seconds": 10.035,
+        "analysis_seconds": 10.035,
+        "llm_status": "ok",
+        "termination": "sources_exhausted",
+        "model_tools": [
+          "sales",
+          "funnel",
+          "releases",
+          "research",
+          "backlog",
+          "competitors"
+        ],
+        "hypotheses": 1,
+        "evidence_count": 9,
+        "source_groups": 5,
+        "usage": {
+          "completion_tokens": 198,
+          "prompt_tokens": 8369,
+          "total_tokens": 8567
+        },
+        "checks": {
+          "citations_resolve": true,
+          "hypotheses_testable": true,
+          "only_allowlisted_sources": true,
+          "correct_decline": true,
+          "emits_verifiable_hypotheses": true,
+          "context": true,
+          "brief_persistence": true
+        }
+      }
+    ]
+  },
+  "streaming_endpoint": {
+    "ttft_seconds": 0.185,
+    "wall_seconds": 2.193,
+    "usage": {
+      "completion_tokens": 80,
+      "prompt_tokens": 35,
+      "total_tokens": 115
+    },
+    "tokens_per_second": 39.34
+  },
+  "server_rss_mib": 2295.4
+}

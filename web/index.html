@@ -1,6 +1,6 @@
 <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
 <header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#productMemory">База знаний</a><a href="#settingsPanel">Настройки</a></nav></header>
-<main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p>
+<main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p><section id="qwen-release" class="panel" hidden></section>
 <section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
 <section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
 <details><summary>Настроить сравнение</summary><form id="settings"><div class="grid dates"><label>Начало базы<input type="date" name="before_start" required></label><label>Последняя неделя базы<input type="date" name="before_end" required></label><label>Начало после релиза<input type="date" name="after_start" required></label><label>Последняя полная неделя<input type="date" name="after_end" required></label><label>Метрика<select name="metric"><option value="orders_index">Недельный индекс</option><option value="orders_index_4w">Скользящий индекс за 4 недели</option></select></label><label>Порог падения, %<input name="alert_percent" type="number" min="0" max="100" step=".1" required></label></div><button>Пересчитать</button></form></details></section>
@@ -44,6 +44,7 @@
 <form id="memorySearch"><label>Поиск в исследованиях и решениях<input name="query" required maxlength="500"></label>
 <label>Продукт<input name="product"></label><div class="grid"><label>С даты<input name="start" type="date"></label>
 <label>До даты<input name="end" type="date"></label></div><button>Найти</button>
+<button id="memorySearchChat" type="button" class="secondary" hidden>Спросить об истории в чате</button>
 <button id="memorySaveNote" type="button" class="secondary">Сохранить текст как заметку</button></form>
 <div id="memoryHits"></div>
 <form id="memoryCompare"><label>Исторический ряд<select name="series" required></select></label>
@@ -52,7 +53,10 @@
 <label>Второе окно с<input name="afterStart" type="date" required></label>
 <label>Второе окно до<input name="afterEnd" type="date" required></label></div>
 <button>Сравнить периоды</button><button type="button" id="memoryAsk" class="secondary">Исследовать с агентом</button>
+<button type="button" id="memoryChat" class="secondary" hidden>Спросить в чате</button>
 <button type="button" id="memoryCompetitors" class="secondary">Изменения цен за второе окно</button>
+<button type="button" id="memoryReleaseChat" class="secondary" hidden>Сравнить релизы в чате</button>
+<button type="button" id="memoryPriceChat" class="secondary" hidden>Сравнить предложения в чате</button>
 <button type="button" id="memoryTimeline" class="secondary">История выбранного ряда</button></form>
 <div id="memoryResult" aria-live="polite"></div>
 </section>
