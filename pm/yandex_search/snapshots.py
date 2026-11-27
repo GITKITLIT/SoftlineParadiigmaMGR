@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .market_matrix import record_day
 from .parsing import utc_stamp
+from .storage import ensure_private_database
 
 _TARIFF_DAY = Decimal("0.488")
 _TARIFF_NIGHT = Decimal("0.366")
@@ -147,6 +148,7 @@ class History:
         if path.is_symlink():
             raise ValueError("invalid_history_path")
         self.path = path
+        ensure_private_database(path)
         with closing(self._db()) as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS run_slot (

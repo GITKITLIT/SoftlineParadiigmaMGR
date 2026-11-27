@@ -44,9 +44,10 @@ def public_plan(data):
     }
 
 
-def validate_result(result, plan):
+def validate_result(result, plan, mode):
+    sources = {"yandex_search"} if mode == "live" else {"yandex_search", "synthetic_fixture"}
     if (
-        result.get("schema_version") != 1 or result.get("source") != "yandex_search"
+        result.get("schema_version") != 1 or result.get("source") not in sources
         or result.get("status") not in {"ok", "partial", "disabled", "unavailable", "error"}
         or type(result.get("items")) is not list or len(result["items"]) > 5010
         or type(result.get("warnings")) is not list
@@ -80,7 +81,7 @@ def capture(*, history, plan, mode, provider, local, own=None, aliases=None, int
         return {"status": "skipped", "reason": reason, "mode": mode}
     try:
         result = provider()
-        validate_result(result, plan)
+        validate_result(result, plan, mode)
         context = build_comparison_context(
             web_result=result, local_evidence=local, own_evidence=own, as_of=as_of,
             competitor_aliases=aliases,
@@ -89,8 +90,11 @@ def capture(*, history, plan, mode, provider, local, own=None, aliases=None, int
         snapshot["plan"] = plan
         previous = history.latest(scope, usable=True)
         changes = compare_snapshots(previous, snapshot, price_threshold_pct=price_threshold_pct)
+        confirmed = any(cell["status"] == "confirmed" for row in snapshot["matrix"]["rows"]
+                        for cell in row["competitors"].values())
+        usable = confirmed and (result["status"] == "ok" or mode == "offline")
+        snapshot["evidence_source"] = result["source"]
         snapshot["changes_from_previous"] = changes
-        usable = result["status"] == "ok" or (mode == "offline" and bool(local))
         history.finish(scope, token, snapshot, usable=usable)
     except BaseException:
         try:

@@ -242,6 +242,9 @@ def _compact_evidence(source):
     return {
         "id": source["id"], "ref": source["ref"], "scope": source["scope"],
         "as_of": source.get("study_date") or source.get("retrieved_at"),
+        "retrieved_at": source.get("retrieved_at") or source.get("imported_at"),
+        "published_at": source.get("published_at") or source.get("published_date"),
+        "provenance": source.get("provenance"),
         "excerpt": (_short(source.get("text")) or "")[:180] or None,
     }
 
@@ -318,6 +321,7 @@ def build_market_matrix(
         comparison = {
             "feature": feature, "competitor": name, "own": own["value"], "observed": current["value"],
             "as_of": {"own": own["as_of"], "competitor": current["as_of"]},
+            "own_status": own["status"], "observed_status": current["status"],
             "status": verdict["status"], "assessment": verdict, "evidence_ids": ids,
         }
         if feature == "price":

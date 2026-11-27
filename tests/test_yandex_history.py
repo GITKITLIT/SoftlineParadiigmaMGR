@@ -41,12 +41,23 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(prices["price_delta"], {"amount": "100", "currency": "RUB", "percent": "10.00"})
         self.assertEqual(prices["before_sources"][0]["id"], old["id"])
         self.assertEqual(prices["after_sources"][0]["id"], new["id"])
+
         support = next(change for change in tracker["changes"] if change["feature"] == "support")
         self.assertEqual(support["reason"], "needs_review")
         self.assertFalse(support["material"])
         scope = history_scope(OFFLINE_INPUT, "offline")
         self.assertEqual(History(self.private).latest(scope)["id"], current["snapshot"]["id"])
         self.assertIn("Существенных изменений 2", markdown(current))
+
+    def test_empty_success_does_not_replace_a_useful_comparison_baseline(self):
+        baseline = self.capture(self.start, [study("old", "Демо A", price="1000", study_date="2026-11-19")])
+        current = self.start + timedelta(days=1)
+        empty = capture(history=self.history, plan=OFFLINE_INPUT, mode="offline",
+                        provider=lambda: empty_result() | {"status": "ok"}, local=[], now=current,
+                        as_of=current.date())
+        latest = self.history.latest(history_scope(OFFLINE_INPUT, "offline"), usable=True)
+        self.assertNotEqual(empty["snapshot"]["id"], baseline["snapshot"]["id"])
+        self.assertEqual(latest["id"], baseline["snapshot"]["id"])
 
     def test_same_or_older_dates_and_different_price_terms_are_not_changes(self):
         self.capture(self.start, [study("a", "Демо A", price="1000", study_date="2026-11-20")])

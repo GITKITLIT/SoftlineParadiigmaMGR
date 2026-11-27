@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import sqlite3
+from stat import S_ISREG
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -14,6 +16,23 @@ _ITEM_FIELDS = (
     "id", "kind", "ref", "title", "text", "url", "domain", "topic", "query",
     "product", "content_type", "retrieved_at",
 )
+
+
+def ensure_private_database(path):
+    """Create state with private permissions before opening it with SQLite."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        info = path.lstat()
+        if not S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("invalid_state_file")
+        if os.name == "posix":
+            if info.st_uid != os.geteuid():
+                raise ValueError("invalid_state_owner")
+            if info.st_mode & 0o077:
+                path.chmod(0o600)
+    else:
+        os.close(descriptor)
 
 
 def _cache_payload(raw):
@@ -42,6 +61,7 @@ class Store:
         if path.is_symlink() or any((folder / ".git").exists() for folder in self.path.parents):
             raise ValueError("search_requires_private_directory")
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ensure_private_database(path)
         with closing(self._connect()) as db:
             version, = db.execute("PRAGMA user_version").fetchone()
             if version in {0, 1, 2}:

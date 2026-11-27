@@ -42,7 +42,7 @@ def offline_fixture():
 
 def offline_search():
     with offline_fixture():
-        return collect_competitor_evidence(**OFFLINE_INPUT)
+        return collect_competitor_evidence(**OFFLINE_INPUT) | {"source": "synthetic_fixture"}
 
 
 def main():
@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--domain")
     parser.add_argument("--topic", choices=TOPIC_TERMS)
     parser.add_argument("--snapshot", type=Path, help="Новый JSON вне репозиториев")
+    parser.add_argument("--summary", action="store_true", help="Метрики и статусы без доказательств")
     args = parser.parse_args()
     if args.snapshot:
         try:
@@ -74,6 +75,8 @@ def main():
             write_private_json(args.snapshot, report)
         except (ValueError, OSError):
             parser.exit(2, "Укажите путь к новому JSON в существующей папке вне репозиториев.\n")
+    if args.summary:
+        report = {key: value for key, value in report.items() if key != "items"} | {"retained": len(result["items"])}
     print(json.dumps(report, ensure_ascii=True, indent=2))
     return int(result["status"] != "ok" or (not args.live and not result["items"]))
 

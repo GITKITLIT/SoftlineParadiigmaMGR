@@ -326,6 +326,27 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.call()["reason"], "storage_unavailable")
         self.request.assert_not_called()
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file permissions")
+    def test_search_state_starts_private_and_retains_existing_budget(self):
+        self.assertEqual(self.call()["status"], "ok")
+        database = self.directory / "yandex-search.sqlite3"
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+        database.chmod(0o644)
+        self.assertEqual(self.call()["usage"], {"requests": 0, "cache_hits": 1})
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+
+    def test_sensitive_query_parameters_are_not_reused_from_an_old_cache(self):
+        self.assertEqual(self.call()["status"], "ok")
+        with closing(sqlite3.connect(self.directory / "yandex-search.sqlite3")) as db, db:
+            key, raw = db.execute("SELECT key,payload FROM cache").fetchone()
+            items, notes = json.loads(raw)
+            items[0]["ref"] = items[0]["url"] = "https://example.com/product?session_id=fixture"
+            db.execute("UPDATE cache SET payload=? WHERE key=?", (json.dumps([items, notes]), key))
+        result = self.call()
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["warnings"], ["result_filtered"])
+        self.request.assert_called_once()
+
     def test_live_smoke_flag_one_query_and_no_retry(self):
         args = {"product": PRODUCT, "domains": ["example.com"], "topics": ["pricing"], "smoke": True}
         self.assertEqual(_collect(**args)["reason"], "live_smoke_disabled")
