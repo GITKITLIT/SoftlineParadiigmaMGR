@@ -1,0 +1,150 @@
+--- a/scripts/pim_backup.py
++++ b/scripts/pim_backup.py
+@@ -75,11 +75,21 @@
+             tmp.unlink()
+
+
++def nonempty(path):
++    try:
++        return path.stat().st_size > 0
++    except FileNotFoundError:
++        return False
++
++
+ def create(database, directory, documents=(), status=None):
+     source, directory = external_input(database), external(directory)
+     if not source.is_file() or directory == source.parent or directory.is_relative_to(source.parent):
+         raise ValueError("Для копии нужен отдельный каталог вне состояния приложения")
+     started = utc()
++    source_before = source.stat() if status is not None else None
++    wal = source.with_name(source.name + "-wal")
++    has_pending_wal = source_before is not None and nonempty(wal)
+     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+     target = directory / ("pim-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:12])
+     target.mkdir(mode=0o700)
+@@ -108,7 +118,14 @@
+         json.dump(manifest, output, indent=2)
+         output.flush()
+         os.fsync(output.fileno())
+-    write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"]})
++    if source_before is not None:
++        source_after = source.stat()
++        before = (source_before.st_dev, source_before.st_ino, source_before.st_mtime_ns, source_before.st_size)
++        after = (source_after.st_dev, source_after.st_ino, source_after.st_mtime_ns, source_after.st_size)
++        write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"],
++                              "source_schema": version, "source_mtime_ns": source_after.st_mtime_ns,
++                              "source_size": source_after.st_size,
++                              "source_quiescent": before == after and not has_pending_wal and not nonempty(wal)})
+     return target, manifest
+
+
+@@ -150,6 +167,38 @@
+     return {"status": "ok", "restore_seconds": round(elapsed, 3), "snapshot_at": manifest["created"]}
+
+
++def retention_plan(directory, now=None):
++    from datetime import timedelta
++    now = now or datetime.now(timezone.utc)
++    root = external(directory)
++    marked, snapshots = {}, []
++    for folder in root.glob("pim-????????T??????Z-*"):
++        if not folder.is_dir() or folder.is_symlink() or not (folder / "manifest.json").is_file():
++            continue
++        date_code = folder.name.split("-")[1]
++        try:
++            instant = datetime.strptime(date_code, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
++        except ValueError:
++            continue
++        snapshots.append((instant, folder.name))
++    for instant, name in sorted(snapshots, reverse=True):
++        age = now - instant
++        if age < timedelta(0):
++            marked["future:" + name] = name
++            continue
++        for label, days, key in [
++            ("hour", 2, instant.strftime("%Y-%m-%dT%H")),
++            ("day", 30, instant.strftime("%Y-%m-%d")),
++            ("week", 84, instant.strftime("%G-%V")),
++            ("month", 366, instant.strftime("%Y-%m")),
++        ]:
++            if age < timedelta(days=days):
++                marked.setdefault(label + key, name)
++    if snapshots:
++        marked["newest"] = max(snapshots)[1]
++    kept = set(marked.values())
++    return {"keep": sorted(kept), "review_for_expiry": sorted(name for _, name in snapshots if name not in kept)}
++
+ def main():
+     os.umask(0o077)
+     parser = argparse.ArgumentParser(description=__doc__)
+@@ -165,6 +214,8 @@
+     restore_args.add_argument("--snapshot", required=True)
+     restore_args.add_argument("--output", required=True)
+     restore_args.add_argument("--status-file")
++    retention_args = actions.add_parser("retention-plan")
++    retention_args.add_argument("--directory", required=True)
+     args = parser.parse_args()
+     try:
+         if args.action == "create":
+@@ -172,8 +223,10 @@
+             result = {"snapshot": path.name, "created": result["created"], "status": "ok"}
+         elif args.action == "verify":
+             result = {"status": "ok", "schema": verify(args.snapshot)["sqlite_version"]}
++        elif args.action == "restore-test":
++            result = restore(args.snapshot, args.output, args.status_file)
+         else:
+-            result = restore(args.snapshot, args.output, args.status_file)
++            result = retention_plan(args.directory)
+         print(json.dumps(result))
+         return 0
+     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as error:
+--- a/pm/ai_store.py
++++ b/pm/ai_store.py
+@@ -30,7 +30,11 @@
+             raise ValueError
+         record = json.loads(file.read_text(encoding="utf8"))
+         fingerprint = path.stat()
+-        if (record["status"] == "ok" and record["source_quiescent"] is True
++        try:
++            pending_wal = path.with_name(path.name + "-wal").stat().st_size > 0
++        except FileNotFoundError:
++            pending_wal = False
++        if (not pending_wal and record["status"] == "ok" and record["source_quiescent"] is True
+                 and record["source_schema"] == version
+                 and record["source_mtime_ns"] == fingerprint.st_mtime_ns
+                 and record["source_size"] == fingerprint.st_size):
+--- a/tests/test_product_memory.py
++++ b/tests/test_product_memory.py
+@@ -310,6 +310,32 @@
+             self.assertEqual(set(offered), {"status", "last_backup", "last_integrity_check"})
+             self.assertNotIn("source_mtime_ns", json.dumps(offered))
+
++    def test_migration_waits_for_closed_writer_and_fresh_snapshot(self):
++        self.active.mkdir()
++        database = self.active / pim_backup.DB_NAME
++        status = self.folder / "migration.json"
++        with closing(sqlite3.connect(database)) as db:
++            db.execute("PRAGMA journal_mode=WAL")
++            db.execute("CREATE TABLE runs(id TEXT PRIMARY KEY, created TEXT, report TEXT)")
++            db.execute("CREATE TABLE imported_evidence(id TEXT PRIMARY KEY, collection TEXT, body TEXT)")
++            db.execute("PRAGMA user_version=4")
++            db.commit()
++        with patch.dict(os.environ, {"PM_MIGRATION_STATUS_FILE": str(status)}):
++            pim_backup.create(database, self.folder / "snapshots", status=status)
++            self.assertIs(json.loads(status.read_text())["source_quiescent"], True)
++            with closing(sqlite3.connect(database)) as writer:
++                writer.execute("INSERT INTO runs VALUES ('fixture', '2025-01-01', '{}')")
++                writer.commit()
++                with self.assertRaisesRegex(ValueError, "проверенной независимой"):
++                    with ai_store.database():
++                        pass
++                pim_backup.create(database, self.folder / "snapshots", status=status)
++                self.assertIs(json.loads(status.read_text())["source_quiescent"], False)
++            pim_backup.create(database, self.folder / "snapshots", status=status)
++            with ai_store.database() as db:
++                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 5)
++                self.assertEqual(db.execute("SELECT id FROM runs").fetchone()["id"], "fixture")
++
+     def test_rejected_decision_is_not_reproposed_without_new_evidence(self):
+         request = {"query": "Почему упали заказы?"}
+         first = investigation.analyze(request)

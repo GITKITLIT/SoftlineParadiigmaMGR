@@ -15,7 +15,7 @@ SEARCH_PREFIXES = ("pm/yandex_search/", "scripts/search_", "tests/test_yandex_",
 DEPLOYMENT_PREFIXES = ("deploy/", "scripts/deploy/", "tests/test_deployment_", "tests/deployment_")
 PATCHES = (
     "0001-chat-wiring.patch", "0002-qualitative-synthesis.patch", "0003-core-evidence.patch",
-    "deployment/0001-qwen-proxy.patch",
+    "deployment/0001-qwen-proxy.patch", "deployment/0002-pim-backup-compat.patch",
 )
 
 
