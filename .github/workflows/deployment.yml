@@ -60,10 +60,12 @@ jobs:
           fetch-depth: 0
       - name: Install and exercise disposable systemd services
         run: sudo bash tests/deployment_clean_install.sh --disposable-vm
+      - name: Exercise restricted SSH forwarding
+        run: sudo bash tests/deployment_ssh_tunnel.sh --disposable-vm
       - name: Test isolated Linux backup permissions
         run: sudo python3 -m unittest discover -s tests -p test_deployment_backup.py -v
       - name: Show synthetic service failures
         if: failure()
         run: |
-          sudo journalctl --no-pager -n 60 +            -u paradiigma.service -u paradiigma-qwen.service +            -u paradiigma-backup.service -u run-paradiigma_backup_input.mount
-          sudo journalctl -k --no-pager -g 'apparmor="DENIED"' -n 20
+          sudo journalctl --no-pager -n 60 -u 'paradiigma*' -u run-paradiigma_backup_input.mount
+          sudo journalctl -k --no-pager -g 'apparmor="DENIED"' -n 20 || true

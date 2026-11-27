@@ -7,7 +7,7 @@ src=$(cd "$(dirname "$0")/.." && pwd -P)
 sandbox=$(mktemp -d)
 trap 'rm -rf -- "$sandbox"' EXIT
 # Clone into a root-owned repository. The input may be owned by the Actions checkout user.
-git -c safe.directory="$src" clone --no-local "$src" "$sandbox/repo"
+git -c safe.directory="$src" -c safe.directory="$src/.git" clone --no-local "$src" "$sandbox/repo"
 cd "$sandbox/repo"
 sha=$(git -c safe.directory="$src" -C "$src" rev-parse HEAD)
 git checkout --detach "$sha"
