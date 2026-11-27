@@ -4,6 +4,7 @@ import os
 import re
 from collections import OrderedDict
 from hashlib import sha256
+from hmac import compare_digest
 from http.cookies import CookieError, SimpleCookie
 from secrets import token_urlsafe
 from threading import Lock
@@ -16,13 +17,38 @@ from . import chat_store
 
 COOKIE = "paradiigma_qwen"
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
+PROXY_USER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,95}")
+PROXY_USER_HEADER = "X-Paradiigma-User"
+PROXY_KEY_HEADER = "X-Paradiigma-Proxy-Key"
 JOBS = OrderedDict()
 JOBS_LOCK = Lock()
 EDIT_FIELDS = {"title": 200, "hypothesis": 800, "verification": 1200}
 
 
 def install():
+    validate_owner_config()
     chat_store.install()
+
+
+def validate_owner_config():
+    mode = os.getenv("PM_QWEN_OWNER_MODE", "local")
+    if mode not in {"local", "proxy"}:
+        raise ValueError("Проверьте PM_QWEN_OWNER_MODE.")
+    if mode == "proxy" and not TOKEN.fullmatch(os.getenv("PM_QWEN_PROXY_KEY", "")):
+        raise ValueError("Для режима proxy настройте PM_QWEN_PROXY_KEY.")
+    return mode
+
+
+def request_owner(handler, *, create=False):
+    if validate_owner_config() == "local":
+        return local_owner(handler, create=create)
+    users = handler.headers.get_all(PROXY_USER_HEADER, [])
+    keys = handler.headers.get_all(PROXY_KEY_HEADER, [])
+    if (len(users) != 1 or len(keys) != 1 or not PROXY_USER.fullmatch(users[0])
+            or not TOKEN.fullmatch(keys[0]) or not compare_digest(keys[0], os.environ["PM_QWEN_PROXY_KEY"])):
+        raise PermissionError("Для чата требуется аутентификация на прокси.")
+    owner = sha256(f"proxy:{users[0]}".encode("ascii")).hexdigest()
+    return owner, None
 
 
 def local_owner(handler, *, create=False):

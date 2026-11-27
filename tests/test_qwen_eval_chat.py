@@ -1,7 +1,10 @@
 """Regression coverage for the chat layer and its private integration contract."""
+import os
 import tempfile
 import threading
 import unittest
+from http.client import HTTPMessage
+from secrets import token_urlsafe
 from unittest.mock import Mock, patch
 
 from llm_lab.integration import chat_api, chat_store
@@ -13,6 +16,37 @@ class ChatTests(unittest.TestCase):
         folder = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict("os.environ", {"PM_PRIVATE_DIR": folder}, clear=True))
         chat_store.install()
+
+    def test_proxy_mode_requires_authenticated_principal_and_stable_ownership(self):
+        key = token_urlsafe(32)
+
+        def request(user=None, proof=None):
+            headers = HTTPMessage()
+            if user:
+                headers[chat_api.PROXY_USER_HEADER] = user
+            if proof:
+                headers[chat_api.PROXY_KEY_HEADER] = proof
+            return Mock(headers=headers)
+
+        with patch.dict(os.environ, {"PM_QWEN_OWNER_MODE": "proxy", "PM_QWEN_PROXY_KEY": ""}):
+            with self.assertRaisesRegex(ValueError, "PM_QWEN_PROXY_KEY"):
+                chat_api.install()
+        with patch.dict(os.environ, {"PM_QWEN_OWNER_MODE": "proxy", "PM_QWEN_PROXY_KEY": key}):
+            for handler in (request(), request("reviewer"), request("reviewer", token_urlsafe(32))):
+                with self.assertRaises(PermissionError):
+                    chat_api.request_owner(handler, create=True)
+
+            owner, cookie = chat_api.request_owner(request("reviewer", key))
+            self.assertIsNone(cookie)
+            self.assertEqual(chat_api.request_owner(request("reviewer", key), create=True), (owner, None))
+            other, _ = chat_api.request_owner(request("second-reviewer", key))
+            dialog = chat_store.create(owner)
+            self.assertEqual(chat_api.route("dialogs", owner, {})["dialogs"][0]["id"], dialog)
+            self.assertEqual(chat_api.route("dialogs", other, {}), {"dialogs": []})
+            duplicated = request("reviewer", key)
+            duplicated.headers[chat_api.PROXY_USER_HEADER] = "reviewer"
+            with self.assertRaises(PermissionError):
+                chat_api.request_owner(duplicated)
 
     def test_private_follow_up_and_new_scope(self):
         analyzer = Mock(wraps=investigation.analyze)
