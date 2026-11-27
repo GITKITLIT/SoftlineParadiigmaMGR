@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from pm.search_security import TOPIC_TERMS
 from pm.web_search import _collect, collect_competitor_evidence
+from scripts.search_import_competitors import write_private_json
 
 OFFLINE_INPUT = {"product": "Демо Pro", "domains": ["example.com"], "topics": ["licensing"]}
 
@@ -42,6 +43,7 @@ def main():
     parser.add_argument("--product")
     parser.add_argument("--domain")
     parser.add_argument("--topic", choices=TOPIC_TERMS)
+    parser.add_argument("--snapshot", type=Path, help="Новый JSON вне репозиториев")
     args = parser.parse_args()
     if args.live:
         if not all((args.product, args.domain, args.topic)):
@@ -51,7 +53,13 @@ def main():
         if any((args.product, args.domain, args.topic)):
             parser.error("--product, --domain и --topic задаются только с --live")
         result = offline_search()
-    print(json.dumps({"mode": "live" if args.live else "offline", **result}, ensure_ascii=True, indent=2))
+    report = {"mode": "live" if args.live else "offline", **result}
+    if args.snapshot:
+        try:
+            write_private_json(args.snapshot, report)
+        except (ValueError, OSError):
+            parser.exit(2, "Укажите путь к новому JSON в существующей папке вне репозиториев.\n")
+    print(json.dumps(report, ensure_ascii=True, indent=2))
     return int(result["status"] != "ok" or (not args.live and not result["items"]))
 
 

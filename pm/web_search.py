@@ -12,7 +12,7 @@ from .yandex_search.storage import Store, cache_key, now_utc
 _STORAGE_ERRORS = (OSError, sqlite3.Error, ValueError, RecursionError)
 _MAX_ATTEMPTS = 3
 _STOP_LIVE = {
-    "authorization_failed", "request_rejected", "tls_failed", "redirect_rejected",
+    "authorization_failed", "tls_failed", "redirect_rejected",
     "provider_daily_limit", "daily_limit", "rate_limited", "storage_unavailable",
 }
 
@@ -54,8 +54,7 @@ def _search(store, config, usage, *, domain, topic, query, product, smoke):
             time.sleep(delay)
 
 
-def _collect(*, product, domains, topics, smoke=False):
-    result = _envelope()
+def _run(result, *, product, domains, topics, smoke):
     try:
         if not enabled("YANDEX_SEARCH_ENABLED"):
             return result | {"status": "disabled", "reason": "search_disabled"}
@@ -89,7 +88,10 @@ def _collect(*, product, domains, topics, smoke=False):
     for domain, topic, query in queries[:config.max_queries]:
         key = cache_key(config.folder, query, config.max_results)
         try:
-            cached = None if smoke else store.get(key, now_utc(), config.ttl)
+            cached = None
+            if not smoke and config.ttl:
+                result["metrics"]["cache_lookups"] += 1
+                cached = store.get(key, now_utc(), config.ttl)
             if cached is not None:
                 usage["cache_hits"] += 1
                 items, notes = cached
@@ -128,6 +130,20 @@ def _collect(*, product, domains, topics, smoke=False):
         result.update(status="partial" if successes else first.status, reason=first.reason)
         warnings.update(dict.fromkeys(failure.reason for failure in failures))
     result.update(items=list(found.values()), warnings=list(warnings))
+    return result
+
+
+def _collect(*, product, domains, topics, smoke=False):
+    start = time.perf_counter()
+    result = _envelope()
+    metrics = {"cache_lookups": 0, "cache_hit_rate": None}
+    result["metrics"] = metrics
+    result = _run(result, product=product, domains=domains, topics=topics, smoke=smoke)
+    if metrics["cache_lookups"]:
+        metrics["cache_hit_rate"] = round(
+            result["usage"]["cache_hits"] / metrics["cache_lookups"], 4,
+        )
+    metrics["elapsed_ms"] = round((time.perf_counter() - start) * 1000, 1)
     return result
 
 
