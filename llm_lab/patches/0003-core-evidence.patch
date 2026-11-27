@@ -47,7 +47,26 @@
                      {"id": str(key), "title": str(row.get("title") or "")[:180], "status": row.get("status")}
 --- a/pm/analysis_context.py
 +++ b/pm/analysis_context.py
-@@ -289,6 +289,14 @@
+@@ -222,6 +222,9 @@
+ FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect", "compare_history", "search_history", "competitor_history", "product_history")
+
+
++EFFECT_TOOLS = {"plan": "sales", "review": "effect"}
++
++
+ class InvestigationContext:
+     """Publish evidence only after its tool runs. Workbook tools share one snapshot."""
+
+@@ -235,6 +238,8 @@
+         self.load_snapshot = snapshot_loader or (lambda: overview(for_analysis=True))
+         self.snapshot = None
+         self.corpus = None
++        effect_intent = request.get("effect_intent")
++        self.effect_tool = EFFECT_TOOLS.get(effect_intent) if isinstance(effect_intent, str) else None
+         self.evidence = {}
+         self.seen_text = set()
+         self.limits = []
+@@ -289,6 +294,17 @@
                  "reason": "no_public_scope" if not request.get("web") else "configuration_disabled",
              }
 
@@ -58,11 +77,14 @@
 +                              ("public_competitors", "competitor_web")):
 +                if self.available.pop(tool, None):
 +                    self.statuses[key] = {"status": "disabled", "reason": "historical_chat_scope"}
++        if self.effect_tool:
++            self.available = {key: description for key, description in self.available.items()
++                              if key == self.effect_tool}
 +
      def get_snapshot(self):
          if self.snapshot is None:
              self.snapshot = recalculate(self.load_snapshot(), self.request.get("config", {}), allow_partial=True)
-@@ -388,12 +396,24 @@
+@@ -388,12 +404,24 @@
              partial = rate is None or values.get("days") != values.get("total")
              incomplete |= partial
              self.add(entry(
@@ -88,7 +110,7 @@
          return ("missing", "no_segments") if not reach else ("partial", "incomplete_coverage") if incomplete else ("ok", None)
 
      def releases(self):
-@@ -402,7 +422,7 @@
+@@ -402,7 +430,7 @@
          launch = snapshot.get("launch")
          if launch:
              self.add(entry("release:current", "release", current or "Релиз",
@@ -97,7 +119,7 @@
                             values={"related_task": snapshot.get("release_task")}))
          cfg = snapshot["config"]
          begin, end = day(cfg["before_start"]), day(cfg["after_end"])
-@@ -442,6 +462,18 @@
+@@ -442,6 +470,18 @@
                                 mode=self.mode, values={"status": row.get("status")}, source_group="backlog"))
              if len(self.matches) >= 4:
                  break
@@ -116,7 +138,31 @@
          return ("ok", None) if self.matches else ("missing", "no_matching_task")
 
      def research(self, competitors):
-@@ -575,6 +607,7 @@
+@@ -523,14 +563,19 @@
+             return "missing", "no_accepted_task"
+         review = task.get("latest_review")
+         plan = task["effect_plan"]
+-        values = {"baseline": plan["baseline"], "target": plan["target"],
+-                  "status": review["status"] if review else "waiting_for_data"}
++        values = {"baseline": plan["baseline"], "target": plan["target"], "plan": plan,
++                  "status": review["status"] if review else "waiting_for_data",
++                  "recommendation": review.get("recommendation") if review else "Дождаться четырёх полных недель."}
+         if review:
+             values.update(review.get("measurement", {}))
++            for key in ("control_adjusted_change_pp", "change_from_baseline", "limitations", "external_factors"):
++                if key in review:
++                    values[key] = review[key]
++        waiting = values["status"] == "waiting_for_data"
+         self.add(entry("task:effect", "effect", task["title"], task["hypothesis"],
+                        mode=task["data_mode"], values=values, source_group="effect_review",
+-                       quality="observed" if review else "incomplete"))
+-        return ("ok", None) if review else ("partial", "waiting_for_data")
++                       quality="incomplete" if waiting else "observed"))
++        return ("partial", "waiting_for_data") if waiting else ("ok", None)
+
+
+     def compare_history(self):
+@@ -575,6 +620,7 @@
              self.add(entry(f"memory:decision:{index}", "memory_context", "Предыдущее решение",
                             item.get("proposal") or item.get("summary") or "", mode=self.mode,
                             quality="historical_context", locator={"run_id": item["run_id"]},
@@ -124,7 +170,7 @@
                             values={"decision": item["decision"], "reason": item["decision_reason"],
                                     "effect": item["effect"]}))
          return ("ok", None) if result["documents"] or result["decisions"] else ("missing", "no_related_history")
-@@ -586,7 +619,8 @@
+@@ -586,7 +632,8 @@
          for row in rows[:5]:
              self.add(entry(f"memory:offer:{row['observation_id']}", "historical_competitor", row["competitor"],
                             mode=self.mode, quality=row["quality"], locator=row["reference"],
@@ -134,7 +180,7 @@
                             source_group=f"public:{row['competitor']}", values={"before": row["before"], "after": row["after"]},
                             memory_observation_id=row["observation_id"]))
          return ("ok", None) if rows else ("missing", "no_comparable_price_changes")
-@@ -601,5 +635,7 @@
+@@ -601,5 +648,7 @@
              self.add(entry(f"memory:release:{row['observation_id']}", "historical_release", row["id"],
                             mode=self.mode, observed_at=row["date"], quality="observed",
                             source_group="release_log", memory_observation_id=row["observation_id"],
@@ -183,10 +229,13 @@
      if termination == "out_of_scope":
          evidence, findings, matches, limits = [], [], [], []
          core, control = None, None
-@@ -77,6 +92,12 @@
+@@ -77,6 +92,15 @@
          status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
      elif skip_synthesis:
          status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
++    elif context.effect_tool:
++        reason = "effect_plan" if context.effect_tool == "sales" else "stored_effect_review"
++        status, hypotheses, usage = "not_needed", [], {}
 +    elif compare_offers:
 +        status, hypotheses, usage, reason = "not_needed", [], {}, "competitor_measurement"
 +    elif context.memory_scope.get("only_history") is True and not any(
@@ -196,7 +245,7 @@
      elif comparison and not any(word in query.casefold() for word in ("почему", "гипотез", "как проверить")):
          status, hypotheses, usage, reason = "not_needed", [], {}, "historical_measurement"
      elif infer is not None:
-@@ -162,10 +183,16 @@
+@@ -162,10 +186,16 @@
          hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
      )]
      elapsed = time.perf_counter() - started
@@ -216,10 +265,17 @@
                 *trace,
 --- a/pm/agent.py
 +++ b/pm/agent.py
-@@ -61,6 +61,11 @@
+@@ -60,7 +60,18 @@
+         trace.append(dict(step="tool", tool=name, arguments=arguments, purpose=purpose, actor=actor,
                            seconds=round(clock() - started, 3), **result))
 
++    effect_tool = getattr(context, "effect_tool", None)
++    if effect_tool == "effect" and effect_tool in context.available:
++        execute(effect_tool, {}, "stored_effect_review", "server")
++        return trace, usage, "sources_exhausted"
      required = requested_tools(context.query) & context.available.keys()
++    if effect_tool in context.available:
++        required.add(effect_tool)
 +    scope = getattr(context, "memory_scope", None)
 +    if isinstance(scope, dict) and scope.get("only_history") is True:
 +        tools = {"compare": "compare_history", "search": "search_history",
@@ -268,3 +324,23 @@
                      }
                  result.append(facts)
      return {"product": name, "releases": sorted(result, key=lambda item: item["date"], reverse=True)[:25]}
+--- a/pm/product_decisions.py
++++ b/pm/product_decisions.py
+@@ -8,6 +8,9 @@
+ def task_proposals(hypotheses, matches, evidence, core, plan, *, backlog_status):
+     proposals = []
+     by_id = {item["id"]: item for item in evidence}
++    delta = (core or {}).get("values", {}).get("delta")
++    problem_description = (f'{core["ref"]}: изменение среднего индекса заказов {delta:+.1f}%.'
++                           if delta is not None else None)
+     for i, item in enumerate(hypotheses):
+         terms = tokens(item["problem"] + " " + item["verify"]) - GENERIC_TERMS
+         cited = {by_id[ref]["ref"] for ref in item["evidence_ids"]
+@@ -20,6 +23,7 @@
+
+         decision = dict(
+             id=f"proposal-{i + 1}", title=item["problem"], hypothesis=item["cause"],
++            problem_description=problem_description or item["problem"],
+             verification=item["verify"], expected=item["expected"], risks=item["risk"],
+             segment=core["ref"] if core else "Не выбран",
+             evidence_ids=item["evidence_ids"], contradictions=item["contradictions"],

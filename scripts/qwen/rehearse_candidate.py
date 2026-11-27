@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE_BASE = "f8b93b1508fdc2b3242976187c6966583a8fa03f"
 CORE = "b71424d71468ccbdd9a2ceb7b44799fc07abe334"
 SEARCH = "93de5460148982747093bfe50e34dbc57abbb88c"
-DEPLOYMENT = "a57b681c64e61243c3e7e63ebdf863a2bf6aa4d0"
+DEPLOYMENT = "6c18b37b41d64fc041506d450ea2558b6b92e5f5"
+DEPLOYMENT_BACKUP = "4f26abaeedd98c18240ce3d618562455c4595058"
 SEARCH_MODULES = {"pm/competitor_sources.py", "pm/search_security.py", "pm/web_search.py"}
 SEARCH_CHECK = "tests/search_ai_core_contract.py"
 SEARCH_PREFIXES = ("pm/yandex_search/", "scripts/search_", "tests/test_yandex_", "tests/fixtures/yandex/")
@@ -81,8 +82,14 @@ def main():
     export(out, search, search_paths)
     export(out, deploy, deployment_paths)
     patches = [str(out / "llm_lab/patches" / name) for name in PATCHES]
-    subprocess.run(["git", "apply", "--check", *patches], cwd=out, check=True)
-    subprocess.run(["git", "apply", *patches], cwd=out, check=True)
+    upstream_backup = subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", DEPLOYMENT_BACKUP, deploy],
+                                     check=False, capture_output=True)
+    # Deployment gained the marker fields and retention command at this revision.
+    apply = ["git", "apply"]
+    if upstream_backup.returncode == 0:
+        apply.append("--exclude=scripts/pim_backup.py")
+    subprocess.run([*apply, "--check", *patches], cwd=out, check=True)
+    subprocess.run([*apply, *patches], cwd=out, check=True)
     print(json.dumps({"qwen": qwen, "core": core, "search": search, "deployment": deploy, "output": str(out)}, indent=2))
 
 

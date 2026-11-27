@@ -22,7 +22,7 @@ PROXY_USER_HEADER = "X-Paradiigma-User"
 PROXY_KEY_HEADER = "X-Paradiigma-Proxy-Key"
 JOBS = OrderedDict()
 JOBS_LOCK = Lock()
-EDIT_FIELDS = {"title": 200, "hypothesis": 800, "verification": 1200}
+EDIT_FIELDS = {"title": 200, "problem_description": 800, "hypothesis": 800, "verification": 1200}
 
 
 def install():
@@ -147,12 +147,15 @@ def approve(turn, body):
         raise ValueError("Проверьте черновик и подтвердите его сохранение.")
     draft = body.get("draft", {})
     if not isinstance(draft, dict) or draft.keys() - EDIT_FIELDS.keys():
-        raise ValueError("Допустимо править название, гипотезу и способ проверки.")
+        raise ValueError("Допустимо править название, описание проблемы, гипотезу и способ проверки.")
     edited = {}
     for key, value in draft.items():
         if not isinstance(value, str) or not 1 <= len(value.strip()) <= EDIT_FIELDS[key]:
             raise ValueError("Проверьте длину полей черновика.")
         edited[key] = redact(value.strip())
+    if "verification" in edited and edited["verification"] != proposal["verification"]:
+        edited["criteria"] = [edited["verification"] if criterion == proposal["verification"] else criterion
+                              for criterion in proposal["criteria"]]
 
     # Publish only the approved task's evidence and Core plan to the team journal.
     run_id = uuid5(NAMESPACE_URL, f"paradiigma:qwen:{report['run_id']}:{proposal['id']}").hex

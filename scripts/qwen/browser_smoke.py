@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 
-def smoke(url, question, live, follow_up):
+def smoke(url, question, live, follow_up, effect_plan, measured_task):
     parsed = urlsplit(url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.username or parsed.password:
         raise ValueError("Use the isolated loopback preview")
@@ -58,7 +58,9 @@ def smoke(url, question, live, follow_up):
         drafts.click()
         draft = panel.locator("form").filter(has=page.get_by_role("button", name="Подтвердить сохранение в бэклоге")).first
         title = "Проверка редактирования черновика в изолированной БД"
+        problem = "Проверить снижение завершённых заказов по журналу."
         draft.get_by_label("Название").fill(title)
+        draft.get_by_label("Описание проблемы").fill(problem)
         draft.get_by_label("Цель четырёхнедельного индекса").fill("100")
         with page.expect_response(lambda r: r.url.endswith("/api/qwen/approve")) as approval:
             draft.get_by_role("button", name="Подтвердить сохранение в бэклоге").click()
@@ -68,6 +70,16 @@ def smoke(url, question, live, follow_up):
         assert repeated.ok and repeated.json()["id"] == saved["id"]
         assert saved["tag"] == "сгенерирована ИИ-помощником"
         assert saved["title"] == title
+        assert saved["problem_description"] == problem
+        if effect_plan:
+            expect(ask).to_be_enabled()
+            prompt.fill("Как оценить эффект?")
+            prompt.press("Enter")
+            planned = panel.locator("#qwen-log article").last
+            expect(planned.get_by_text("Как измерить эффект", exact=True)).to_be_visible(timeout=180000)
+            expect(planned.get_by_text("Базовый период ·", exact=False)).to_be_visible()
+            expect(planned.get_by_text("Цель · требует согласования", exact=True)).to_be_visible()
+            expect(planned.get_by_role("link", name="Предыдущий вопрос")).to_have_attribute("href", "#qwen-turn-1")
         if follow_up:
             question_two = "Какие доказательства подтверждают эту гипотезу?"
             expect(ask).to_be_enabled()
@@ -77,7 +89,8 @@ def smoke(url, question, live, follow_up):
             assert started.value.ok
             second = panel.locator("#qwen-log article").last
             expect(second).to_contain_text(question_two, timeout=180000)
-            expect(second.get_by_role("link", name="Предыдущий вопрос")).to_have_attribute("href", "#qwen-turn-1")
+            previous_position = 2 if effect_plan else 1
+            expect(second.get_by_role("link", name="Предыдущий вопрос")).to_have_attribute("href", f"#qwen-turn-{previous_position}")
             expect(second.get_by_text("Источники из предыдущего ответа")).to_be_visible()
         observed = context.request.post(base + "/api/tasks/review", data={"task_id": saved["id"]}).json()
         assert observed["status"] == "waiting_for_data"
@@ -86,6 +99,24 @@ def smoke(url, question, live, follow_up):
         assert fab.bounding_box()["x"] < anchor["x"] - 30
         fab.click()
         expect(panel.get_by_text(question, exact=True)).to_be_visible()
+        if effect_plan or measured_task:
+            page.locator("#journal summary").click()
+            page.locator("#reloadRuns").click()
+            for label, status in [(title if effect_plan else None, "Ожидаются четыре полные недели"),
+                                  (measured_task, "Цель не достигнута")]:
+                if not label:
+                    continue
+                expect(ask).to_be_enabled()
+                page.keyboard.press("Escape")
+                row = page.locator("#serverTasks article").filter(has_text=label)
+                row.get_by_role("button", name="Обсудить эффект в чате").click()
+                ask.click()
+                latest = panel.locator("#qwen-log article").last
+                expect(latest.get_by_text(status, exact=False).first).to_be_visible(timeout=30000)
+                if label == measured_task:
+                    expect(latest.get_by_text("Следующий шаг · Пересмотреть гипотезу", exact=True)).to_be_visible()
+                    latest.get_by_text("Расчёт эффекта", exact=True).click()
+                    expect(latest.get_by_text("Разница изменений с контрольным рядом", exact=False)).to_be_visible()
         dialog_id = page.locator("#qwen-dialogs").input_value()
         other = browser.new_context()
         assert not other.request.post(base + "/api/qwen/history", data={"dialog_id": dialog_id}).ok
@@ -97,7 +128,8 @@ def smoke(url, question, live, follow_up):
         expect(panel).to_be_hidden()
         assert not errors, errors
         print("Browser: drag, Enter, details, edit, confirm, replay, private history, mobile, shared backlog, effect waiting"
-              + (", previous question and citations" if follow_up else ""))
+              + (", previous question and citations" if follow_up else "")
+              + (", saved effect plan" if effect_plan else "") + (", measured effect" if measured_task else ""))
         browser.close()
 
 
@@ -108,6 +140,8 @@ if __name__ == "__main__":
                         help="Confirm the preview uses a disposable state directory")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--follow-up", action="store_true")
+    parser.add_argument("--effect-plan", action="store_true")
+    parser.add_argument("--measured-task", help="Title of a seeded task with a failed measurement and a control row")
     parser.add_argument("--question", default="Почему снизились заказы? Проверь воронку, интервью, конкурентов и бэклог.")
     args = parser.parse_args()
-    smoke(args.url, args.question, args.live, args.follow_up)
+    smoke(args.url, args.question, args.live, args.follow_up, args.effect_plan, args.measured_task)

@@ -96,6 +96,18 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(result["sources"], ai_store.run(saved["run_id"])["evidence"])
         self.assertEqual(len(ai_store.recent()), 1)
 
+    def test_effect_plan_uses_the_previous_report_when_its_scope_matches(self):
+        previous = chat.consult({"question": "Почему снизились заказы?"})
+        analyze = Mock(side_effect=AssertionError("The accepted plan already exists"))
+        fresh = chat.consult({"question": "Как оценить эффект?"}, previous=previous, analyze=analyze)
+        self.assertEqual(fresh["previous_run_id"], previous["report"]["run_id"])
+        self.assertEqual(fresh["reply"]["effect_plan"], previous["report"]["effect_plan"])
+        self.assertIsNone(fresh["reply"]["effect_plan"]["target"])
+        self.assertTrue(fresh["reply"]["expand_effect_plan"])
+        self.assertFalse(fresh["reply"]["usage"])
+        self.assertFalse(fresh["reply"]["drafts"])
+        analyze.assert_not_called()
+
     def test_owner_bound_dialog_and_concurrent_append(self):
         key = chat_store.create("owner-a")
         turn = {"question": "Private user question", "reply": {"answer": "Response"}}
@@ -132,9 +144,14 @@ class ChatTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 chat_api.approve(turn, fields | {"confirm": True, "draft": {"evidence_ids": []}})
             approve.assert_not_called()
-            chat_api.approve(turn, fields | {"confirm": True, "draft": {"title": "Новый заголовок"}})
+            chat_api.approve(turn, fields | {"confirm": True, "draft": {
+                "title": "Новый заголовок", "problem_description": "Пропуски в журнале событий.",
+                "verification": "Сопоставить корзину с журналом событий.",
+            }})
         args, kwargs = approve.call_args
         self.assertEqual(args[0]["action"], "accept")
         self.assertEqual(kwargs["edited"]["title"], "Новый заголовок")
+        self.assertEqual(kwargs["edited"]["problem_description"], "Пропуски в журнале событий.")
+        self.assertEqual(kwargs["edited"]["criteria"][0], kwargs["edited"]["verification"])
         self.assertNotIn("request_context", kwargs["source_report"])
         self.assertEqual(kwargs["source_report"]["proposed_tasks"][0]["tag"], ai_store.TASK_TAG)

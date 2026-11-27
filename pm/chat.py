@@ -18,6 +18,7 @@ FOLLOW_UP = re.compile(
 )
 COUNTEREVIDENCE = re.compile(r"противореч", re.I)
 SUPPORT = re.compile(r"доказательств|подтвержд", re.I)
+PLAN_EFFECT = re.compile(r"как\s+(?:измерить|оценить|посчитать)\s+эффект", re.I)
 HISTORICAL_WINDOWS = re.compile(r"год назад|прошл\w+ год|\bквартал\w*\b|\b20\d\d\b.+\b20\d\d\b", re.I)
 MEMORY_LOOKUP = re.compile(
     r"похож\w*\s+(?:проблем|аномал|расследован)|повторяющ\w*\s+(?:пользовательск\w*\s+)?проблем|"
@@ -66,8 +67,10 @@ def normalize_turn(body):
 def consult(body, *, previous=None, analyze=investigation.analyze, progress=None):
     """Return the private turn and its presentation for the calling session store."""
     question, mode, scope = normalize_turn(body)
+    topical = not off_topic(question)
+    asks_for_plan = bool(PLAN_EFFECT.search(question))
     follow_up = mode == "follow_up" or (
-        mode == "auto" and not off_topic(question) and bool(FOLLOW_UP.search(question))
+        mode == "auto" and topical and (asks_for_plan or bool(FOLLOW_UP.search(question)))
     )
     prior = previous if follow_up else None
     effective_scope = ((prior or {}).get("scope", {}) | scope)
@@ -78,11 +81,18 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
     historical = memory.keys() & MEMORY_TOOLS.keys()
     if historical:
         effective_scope["memory"] = memory | {"only_history": True}
+    asked = requested_tools(question)
+    effect_intent = None
+    if not historical and topical:
+        if effective_scope.get("task_id") and "effect" in asked:
+            effect_intent = "review"
+        elif asks_for_plan:
+            effect_intent = "plan"
     query = question
     hypothesis = None
     old_report = (prior or {}).get("report") or {}
     evidence_question = bool(COUNTEREVIDENCE.search(question) or SUPPORT.search(question))
-    if prior and not off_topic(question):
+    if prior and topical:
         context = "\nПредыдущий вопрос: " + prior["question"][:115]
         hypotheses = old_report.get("hypotheses") or []
         if hypotheses and effective_scope == prior.get("scope") and (
@@ -98,22 +108,29 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
         "scope": effective_scope,
         "previous_run_id": prior["report"]["run_id"] if prior and prior.get("report") else None,
     }
-    if not prior and follow_up and not scope:
+    if not prior and follow_up and not scope and not effect_intent:
         return turn | {"report": None, "reply": {"answer": "Уточните, к какому вопросу или гипотезе вы возвращаетесь."}}
     if HISTORICAL_WINDOWS.search(question) and not historical:
         return turn | {"report": None, "reply": {
             "answer": "Укажите исторический ряд и два периода для сравнения.",
             "needs": "historical_windows",
         }}
-    if "effect" in requested_tools(question) and not effective_scope.get("task_id") and not historical:
+    if "effect" in asked and not effective_scope.get("task_id") and not historical and effect_intent != "plan":
         return turn | {"report": None, "reply": {
             "answer": "Выберите согласованную задачу, эффект которой нужно оценить.",
             "needs": "accepted_task",
         }}
-    report = analyze({"query": query, **effective_scope}, persist=False, progress=progress)
-    asked = requested_tools(question)
+    request = {"query": query, **effective_scope}
+    if effect_intent:
+        request["effect_intent"] = effect_intent
+    reuse_plan = effect_intent == "plan" and prior and effective_scope == prior.get("scope") and (
+        old_report.get("effect_plan", {}).get("baseline") is not None
+    )
+    report = old_report if reuse_plan else analyze(request, persist=False, progress=progress)
     focus = set()
-    if historical:
+    if effect_intent:
+        focus.add("effect" if effect_intent == "review" else "effect_plan")
+    elif historical:
         for name in historical:
             focus |= MEASUREMENT_FOCUS[MEMORY_TOOLS[name]]
     elif not re.search(r"почему|гипотез|провер|что делать|после релиз", question, re.I):
@@ -122,6 +139,8 @@ def consult(body, *, previous=None, analyze=investigation.analyze, progress=None
         for tool in asked:
             focus |= MEASUREMENT_FOCUS.get(tool, set())
     view = report_view(report, focus=focus)
+    if reuse_plan:
+        view.update(llm_status="not_needed", trace=[], usage={}, seconds=0, drafts=[], hypotheses=[], notice="")
     if turn["previous_run_id"]:
         view["previous_run_id"] = turn["previous_run_id"]
     if hypothesis and evidence_question:

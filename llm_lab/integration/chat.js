@@ -180,7 +180,7 @@
       row.append(element("p", item.published_at ? "Опубликовано · " + item.published_at : "Дата публикации неизвестна"));
     }
     if (item.text) row.append(element("p", item.text));
-    if (item.values) row.append(element("p", Object.entries(item.values).map(([key, value]) =>
+    if (item.values && item.kind !== "effect") row.append(element("p", Object.entries(item.values).map(([key, value]) =>
       key + " · " + (value == null ? "нет данных" : JSON.stringify(value))).join(" / ")));
     if (item.kind === "competitor_web" && typeof item.locator === "string") {
       const labels = {product: "Продукт", version: "Редакция", license_type: "Тип лицензии", duration: "Срок",
@@ -232,6 +232,41 @@
         }), ...view.observations.map(source),
       ]));
     }
+    if (view.show_effect_plan ?? Boolean(view.effect_plan?.baseline_period)) {
+      const plan = view.effect_plan;
+      const rows = [
+        element("p", "Показатель · индекс заказов за четыре недели"),
+        element("p", "Базовый период · " + (plan.baseline_period?.join(" — ") || "нет полных данных")),
+        element("p", "Базовый уровень · " + (plan.baseline ?? "недоступен")),
+        element("p", "Цель · " + (plan.target ?? "требует согласования")),
+        element("p", "Наблюдение после исправления · полных недель " + plan.observation_weeks),
+      ];
+      if (plan.control_baseline != null) rows.push(element("p", "База контрольного ряда · " + plan.control_baseline));
+      if (plan.guardrails?.length) rows.push(element("p", "Контроль · " + plan.guardrails.join(" / ")));
+      if (plan.stop_condition) rows.push(element("p", plan.stop_condition));
+      const evidence = view.sources.filter((item) => ["effect", "orders"].includes(item.kind));
+      if (evidence.length) rows.push(cite(view, evidence.map((item) => item.id)));
+      const section = details("Как измерить эффект", rows);
+      section.open = Boolean(view.expand_effect_plan);
+      block.append(section);
+    }
+    const effect = view.sources.find((item) => item.kind === "effect");
+    const measured = effect?.values;
+    if (measured?.start && measured?.end) {
+      const rows = [element("p", "Окно замера · " + measured.start + " — " + measured.end)];
+      if (measured.change_from_baseline != null) {
+        rows.push(element("p", "Изменение к базовому уровню · " + measured.change_from_baseline.toFixed(1) + " п. индекса"));
+      }
+      if (measured.astra != null) rows.push(element("p", "Контрольный индекс · " + measured.astra));
+      if (measured.control_adjusted_change_pp != null) {
+        rows.push(element("p", "Разница изменений с контрольным рядом · " + measured.control_adjusted_change_pp.toFixed(1) + " п. п."));
+      }
+      for (const line of measured.limitations || []) rows.push(element("p", line));
+      if (measured.external_factors?.length) {
+        rows.push(element("p", "Внешние факторы · " + measured.external_factors.join(" / ")));
+      }
+      block.append(details("Расчёт эффекта", [...rows, cite(view, [effect.id])]));
+    }
     if (view.hypotheses.length) {
       block.append(details("Гипотезы", view.hypotheses.map((item) => {
         const row = element("div");
@@ -267,11 +302,12 @@
     const submit = element("button", "Подтвердить сохранение в бэклоге");
     const status = element("p");
     status.setAttribute("role", "status");
-    for (const [label, key, length] of [["Название", "title", 200], ["Гипотеза", "hypothesis", 800],
+    for (const [label, key, length] of [["Название", "title", 200], ["Описание проблемы", "problem_description", 800],
+      ["Гипотеза", "hypothesis", 800],
       ["Способ проверки", "verification", 1200]]) {
       const wrapper = element("label", label);
       const field = element("textarea");
-      field.value = draft[key];
+      field.value = draft[key] ?? draft.title;
       field.required = true;
       field.maxLength = length;
       field.rows = 2;
@@ -289,7 +325,7 @@
       element("p", "Нужны данные · " + draft.priority.dependencies.join(" / ")),
       element("p", "База · " + (draft.plan.baseline_period?.join(" — ") || "нет периода")),
       element("p", "Контроль · " + (draft.plan.guardrails.join(" / ") || "нет контрольного ряда")),
-      element("p", draft.priority.reason), element("p", draft.tag), label, submit, status);
+      element("p", "Предлагаемый приоритет · " + draft.priority.reason), element("p", draft.tag), label, submit, status);
     if (draft.existing_tasks.length) {
       box.prepend(element("p", "Пересмотреть приоритет · " + draft.existing_tasks.map((item) => item.id + " " + item.title).join(" / ")));
     }

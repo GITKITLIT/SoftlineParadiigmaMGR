@@ -41,10 +41,19 @@ def report_view(report, *, focus=None):
         "research", "interview", "competitor_local", "competitor_web", "backlog", "release",
         "historical_document",
     } and (not focus or item["kind"] in focus)]
-    offer_check = offer_comparison(evidence)
     market_focus = focus and "competitor_web" in focus
+    effect_focus = focus and "effect" in focus
+    plan_focus = focus and "effect_plan" in focus
+    offer_check = offer_comparison(evidence) if not (effect_focus or plan_focus) else None
+    effect = next((item for item in selected if item["kind"] == "effect"), None)
+    reviewed = effect["values"] if effect else {}
+    effect_plan = reviewed.get("plan", report["effect_plan"])
     if report["termination"] == "out_of_scope":
         conclusion = report["summary"]
+    elif plan_focus:
+        conclusion = effect_plan_summary(effect_plan)
+    elif effect_focus and not effect:
+        conclusion = "Для выбранной задачи оценка эффекта недоступна."
     elif market_focus and offer_check:
         conclusion = offer_check["text"]
     elif market_focus and report["sources_status"]["competitor_web"]["status"] == "not_checked":
@@ -70,11 +79,15 @@ def report_view(report, *, focus=None):
     next_step = report["recommended_actions"][0] if hypotheses or measurement_gap else None
     if market_focus and offer_check and offer_check["missing"]:
         next_step = offer_check["missing"][0]
+    if plan_focus:
+        next_step = effect_plan.get("target_basis") if effect_plan.get("baseline") is not None else None
+    elif effect_focus:
+        next_step = reviewed.get("recommendation")
     return {
         "run_id": report["run_id"],
         "answer": conclusion,
         "llm_status": report["llm_status"],
-        "data_mode": report["data_mode"],
+        "data_mode": effect["data_mode"] if effect_focus and effect else report["data_mode"],
         "notice": report.get("notice", ""),
         "measurements": measurements,
         "observations": observations,
@@ -84,13 +97,23 @@ def report_view(report, *, focus=None):
         "findings": report["findings"],
         "hypotheses": hypotheses,
         "next_step": next_step,
-        "effect_plan": report["effect_plan"],
+        "effect_plan": effect_plan,
+        "show_effect_plan": bool(plan_focus or effect or effect_plan.get("baseline_period")),
+        "expand_effect_plan": bool(plan_focus),
         "limitations": report["limitations"],
         "trace": [event for event in report["trace"] if event["step"] not in HIDDEN_PHASES],
         "drafts": report["proposed_tasks"],
         "usage": report["usage"],
         "seconds": report["seconds"],
     }
+
+
+def effect_plan_summary(plan):
+    weeks = plan.get("observation_weeks", 4)
+    label = "Индекс заказов за четыре полные недели" if weeks == 4 else "Индекс заказов после исправления"
+    if plan.get("baseline") is None:
+        return f"{label}. Сначала соберите данные базового периода."
+    return f"{label} сравните с базой {plan['baseline']:g}."
 
 
 def measurement(item):
@@ -134,5 +157,10 @@ def measurement(item):
         if values.get("effect") in EFFECT_LABELS:
             text += f" · {EFFECT_LABELS[values['effect']]}"
     else:
-        text = EFFECT_LABELS.get(values["status"], "Статус оценки недоступен") + "."
+        text = f"{item['ref']} · {EFFECT_LABELS.get(values['status'], 'Статус оценки недоступен')}."
+        if values.get("kaspersky") is not None:
+            text += f" Основной индекс {values['kaspersky']:g}"
+            if values.get("target") is not None:
+                text += f" при цели {values['target']:g}"
+            text += "."
     return {"evidence_id": item["id"], "text": text}
