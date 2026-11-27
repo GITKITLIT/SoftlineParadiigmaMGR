@@ -17,7 +17,9 @@ _MAX_MEMBER = 16 * 1024 * 1024
 _MAX_EXPANDED = 64 * 1024 * 1024
 _MAX_ROWS = 10_000
 _MAX_COLUMNS = 80
-_FORBIDDEN_SHEET = "эталонныйкейс"
+_REFERENCE_LABELS = {"эталонныйкейс", "эталонныйответ", "эталонныеответы"}
+
+
 _FIELDS = {
     "товар": "product", "продукт": "product", "product": "product",
     "конкурент": "competitor", "competitor": "competitor",
@@ -42,6 +44,21 @@ _FIELDS = {
     "дополнительные сервисы": "services", "сервисные преимущества": "services",
     "подписка": "subscription", "тип подписки": "subscription", "характеристики": "features",
 }
+
+
+def _reference_heading(value):
+    if not isinstance(value, str):
+        return False
+    heading = re.split(r"[:!·]|\s+[–—-]\s+", value, maxsplit=1)[0]
+    return re.sub(r"[\W_]+", "", heading.casefold()) in _REFERENCE_LABELS
+
+
+def excluded_reference(item):
+    """Keep explicitly labeled answer keys out of imports and comparison."""
+    locations = [item.get(key) for key in ("provenance", "locator")]
+    labels = [location.get("sheet") for location in locations if isinstance(location, dict)]
+    labels += str(item.get("ref", "")).split(" · ")
+    return any(_reference_heading(label) for label in labels)
 
 
 def _archive_bytes(path):
@@ -136,7 +153,7 @@ def _xlsx_records(path, data, archive, limit):
     records = []
     try:
         for sheet in book.worksheets:
-            if re.sub(r"[\W_]+", "", sheet.title.casefold()) == _FORBIDDEN_SHEET:
+            if _reference_heading(sheet.title):
                 continue
             sheet.reset_dimensions()
 
@@ -185,6 +202,8 @@ def _pptx_records(path, archive, limit):
             plain_text("".join(run.text or "" for run in node.iterfind(".//{*}t")), 500)
             for node in slide.iterfind(".//{*}p") if id(node) not in table_paragraphs
         ]
+        if any(_reference_heading(paragraph) for paragraph in paragraphs):
+            continue
         text = "\n".join(line for line in paragraphs if line)
         labeled = [paragraph.split(":", 1) for paragraph in paragraphs if ":" in paragraph]
         metadata = _read_metadata((label.strip(), value.strip()) for label, value in labeled)
@@ -220,7 +239,8 @@ def merge_competitor_corpus(existing: list[dict], incoming: list[dict]) -> list[
             for field in ("id", "ref", "kind", "text")
         ):
             raise ValueError("invalid_evidence_record")
-        merged.setdefault(item["id"], item)
+        if not excluded_reference(item):
+            merged.setdefault(item["id"], item)
     return list(merged.values())
 
 

@@ -4,7 +4,7 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from pm.competitor_sources import _read_metadata
+from pm.competitor_sources import _read_metadata, excluded_reference
 
 from .market_matrix import build_market_matrix, record_day
 
@@ -110,7 +110,7 @@ def build_comparison_context(
     if own_evidence is not None and (
         own_evidence.get("kind") in {"competitor_web", "Конкуренты"}
         or own_evidence.get("content_type") in {"snippet", "page_excerpt"}
-        or not own_evidence.get("id") or not own_evidence.get("ref")
+        or not own_evidence.get("id") or not own_evidence.get("ref") or excluded_reference(own_evidence)
     ):
         raise ValueError("own_evidence_requires_internal_source")
     if type(max_competitors) is not int or not 1 <= max_competitors <= 12:
@@ -129,7 +129,8 @@ def build_comparison_context(
         "offer": {key: value or None for key, value in own_terms.items()},
     }
     observations = []
-    sources = [(item, "local_study") for item in local_evidence if item["kind"] == "Конкуренты"]
+    sources = [(item, "local_study") for item in local_evidence
+               if item["kind"] == "Конкуренты" and not excluded_reference(item)]
     sources.extend((item, "search_snippet" if item["content_type"] == "snippet" else "public_page")
                    for item in web_result["items"] if item["kind"] == "competitor_web")
     matrix_sources = []

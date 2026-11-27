@@ -6,6 +6,9 @@ import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from pm.search_security import source_url
 
 from .snapshots import _rows, compare_snapshots
 
@@ -33,8 +36,11 @@ def history_batch(directory: Path, *, after=0, limit=20):
     """Read snapshots and their preceding usable snapshot without opening a write connection."""
     if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("invalid_history_cursor")
-    path = Path(directory) / "competitor-history.sqlite3"
-    if path.is_symlink():
+    directory = Path(directory).resolve(strict=True)
+    path = directory / "competitor-history.sqlite3"
+    if path.is_symlink() or not path.is_file() or any(
+        (parent / ".git").exists() for parent in (directory, *directory.parents)
+    ):
         raise ValueError("invalid_history_path")
     uri = path.resolve(strict=True).as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=3)) as db:
@@ -54,14 +60,39 @@ def history_batch(directory: Path, *, after=0, limit=20):
 
 def _references(snapshot, identifiers):
     index = snapshot["evidence_index"]
-    return [dict(index[identifier]) for identifier in dict.fromkeys(identifiers) if identifier in index]
+    references = []
+    for identifier in dict.fromkeys(identifiers):
+        if identifier not in index:
+            continue
+        source = dict(index[identifier])
+        if source.get("scope") in {"public_page", "search_snippet"}:
+            ref = source.get("url") or source.get("ref") or ""
+            try:
+                clean = source_url(ref, urlsplit(ref).hostname)
+            except ValueError:
+                clean = None
+            source["ref"] = source["url"] = clean
+            # Page provenance can contain the original, pre-redirect URL.
+            provenance = dict(source.get("provenance") or {})
+            old_url = provenance.pop("discovered_url", None)
+            if isinstance(old_url, str):
+                try:
+                    url = source_url(old_url, urlsplit(old_url).hostname)
+                except ValueError:
+                    url = None
+                if url is not None:
+                    provenance["discovered_url"] = url
+            source["provenance"] = provenance
+        references.append(source)
+    return references
 
 
 def project_snapshot(snapshot, previous=None, *, mode):
     """Build native PIM inputs. The operator explicitly selects the local or synthetic partition."""
     if mode not in {"local", "synthetic"}:
         raise ValueError("invalid_pim_mode")
-    if snapshot.get("mode") == "demo" and mode != "synthetic":
+    if mode != "synthetic" and (snapshot.get("mode") == "demo"
+                                or snapshot.get("evidence_source") == "synthetic_fixture"):
         raise ValueError("synthetic_snapshot_cannot_enter_local_memory")
     if snapshot.get("schema_version") != 1:
         raise ValueError("unsupported_snapshot")
@@ -154,7 +185,7 @@ def project_snapshot(snapshot, previous=None, *, mode):
             "method": "competitive-snapshot-v1", "aggregation": "snapshot",
             "quality": quality, "value": float(cell["key"]) if confirmed_price else None,
             "start": observed or captured[:10], "event_date": observed,
-            "retrieved": received or captured, "reference": primary.get("ref"),
+            "retrieved": captured, "reference": primary.get("ref"),
             "metadata": metadata, "dimensions": dims,
         })
     return result

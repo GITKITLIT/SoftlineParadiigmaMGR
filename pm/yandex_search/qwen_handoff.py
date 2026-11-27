@@ -32,7 +32,8 @@ def _quote(value):
 
 def _source(item):
     return {
-        "id": item["id"], "ref": item["ref"], "type": _TYPES.get(item["scope"], "unknown"),
+        "id": item["id"], "ref": None if _unsafe(item["ref"]) else item["ref"],
+        "type": _TYPES.get(item["scope"], "unknown"),
         "date": item.get("as_of"), "quote": _quote(item.get("excerpt")),
     }
 
@@ -88,6 +89,7 @@ def pack_competitor_context(context, *, changes=None, max_bytes=4500):
         ids = item["evidence_ids"]
         add("facts", {
             "feature": item["feature"], "competitor": item["competitor"], "state": item["status"],
+            "observed_state": item.get("observed_status"),
             "own": item["own"], "observed": item["observed"], "dates": item["as_of"],
             "details": {key: item["assessment"][key] for key in (
                 "different_terms", "unknown_terms", "competitor_minus_own", "currency",

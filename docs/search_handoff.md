@@ -1,6 +1,6 @@
 # Передача модуля конкурентного анализа
 
-Проверка с опубликованной AI Core и инструкции для PIM, Qwen и live smoke описаны в [отчёте release candidate](search_reports/SEARCH_RELEASE_CANDIDATE_REPORT.md). Настройки первоисточников, матрицы и мониторинга приведены в [отчёте второго спринта](search_reports/SECOND_SPRINT_REPORT_YandexSearch.md). Контракт поискового адаптера остаётся v1.
+Инструкции релизной проверки, подключения PIM и Qwen приведены в [передаче релиза](search_release_handoff.md). Настройки первоисточников, матрицы и мониторинга описаны в [отчёте второго спринта](search_reports/SECOND_SPRINT_REPORT_YandexSearch.md). Контракт поискового адаптера остаётся v1.
 
 Ветка `feature/yandex-search` основана на `215396f4f8def42e826aef1d2661cfe8b017234d` репозитория `GITKITLIT/SoftlineParadiigmaMGR`. Модуль импортируется на этой базе без ветки AI Core. Новых зависимостей нет. Для XLSX используется имеющийся `openpyxl`, для PPTX и веб-поиска — стандартная библиотека Python 3.11+.
 
@@ -90,7 +90,7 @@ def collect_competitor_evidence(
   "schema_version": 1,
   "status": "ok",
   "reason": null,
-  "source": "yandex_search",
+  "source": "synthetic_fixture",
   "retrieved_at": "2026-11-27T00:00:00Z",
   "items": [
     {

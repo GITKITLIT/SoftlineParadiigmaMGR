@@ -12,7 +12,7 @@ from zipfile import ZipFile
 from openpyxl import Workbook
 
 from pm import research
-from pm.competitor_sources import load_competitor_evidence
+from pm.competitor_sources import load_competitor_evidence, merge_competitor_corpus
 from scripts.search_import_competitors import ROOT, write_private_json
 from scripts.search_smoke import offline_search
 
@@ -33,7 +33,7 @@ def synthetic_book(path):
     book.close()
 
 
-def synthetic_deck(path):
+def synthetic_deck(path, *, first_title="Продукт: Демо Pro"):
     with ZipFile(path, "w") as archive:
         archive.writestr("ppt/presentation.xml", """<p:presentation xmlns:p="urn:p" xmlns:r="urn:r">
             <p:sldIdLst><p:sldId id="256" r:id="r2"/><p:sldId id="257" r:id="r1"/></p:sldIdLst>
@@ -44,8 +44,8 @@ def synthetic_deck(path):
             </Relationships>""")
         archive.writestr("ppt/slides/slide1.xml", """<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
             <a:p><a:r><a:t>Второй по порядку</a:t></a:r></a:p></p:sld>""")
-        archive.writestr("ppt/slides/slide2.xml", """<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
-            <a:p><a:r><a:t>Продукт: Демо Pro</a:t></a:r></a:p>
+        archive.writestr("ppt/slides/slide2.xml", f"""<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+            <a:p><a:r><a:t>{first_title}</a:t></a:r></a:p>
             <a:p><a:r><a:t>Дата проверки: 02.11.2026</a:t></a:r></a:p></p:sld>""")
 
 
@@ -87,6 +87,14 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(front["study_date"], "2026-11-02")
         self.assertEqual(back["text"], "Второй по порядку")
         self.assertNotIn("study_date", back)
+
+    def test_explicit_reference_slide_is_dropped_without_renumbering_provenance(self):
+        deck = self.directory / "labeled.pptx"
+        synthetic_deck(deck, first_title="Эталонный_ответ: пример")
+        slide, = load_competitor_evidence(deck)
+        self.assertEqual(slide["provenance"]["slide"], 2)
+        answer = slide | {"id": "reference", "ref": "legacy.xlsx · Эталонный кейс!A1"}
+        self.assertEqual(merge_competitor_corpus([answer, slide], [slide]), [slide])
 
     def test_malformed_and_unsafe_archives(self):
         file = self.directory / "malformed.pptx"
