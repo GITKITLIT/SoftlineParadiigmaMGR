@@ -1,0 +1,92 @@
+"""Compact release and chat views of a single validated AI Core report."""
+
+from . import ai_store
+
+
+EFFECT_LABELS = {
+    "waiting_for_data": "Ожидаются четыре полные недели после исправления",
+    "achieved": "Цель достигнута",
+    "partial": "Частичное улучшение",
+    "not_achieved": "Цель не достигнута",
+    "inconclusive": "Для оценки нужны дополнительные данные",
+    "stop_condition_met": "Достигнут согласованный порог остановки",
+}
+HIDDEN_PHASES = {"collect", "qwen"}
+
+
+def release_brief(run_id, *, read_run=ai_store.run):
+    """Read a saved Core report. Opening the brief does not rerun inference."""
+    return report_view(read_run(run_id))
+
+
+def report_view(report, *, focus=None):
+    evidence = report["evidence"]
+    hypotheses = report["hypotheses"]
+    selected = [item for item in evidence if item["kind"] in {
+        "orders", "funnel", "historical_metric", "historical_comparison", "effect",
+    }]
+    if focus:
+        selected = [item for item in selected if item["kind"] in focus]
+    measurements = [measurement(item) for item in selected]
+    observations = [item for item in evidence if item["kind"] in {
+        "research", "interview", "competitor_local", "competitor_web", "backlog", "release",
+        "historical_document", "historical_competitor", "memory_context",
+    } and (not focus or item["kind"] in focus)]
+    if report["termination"] == "out_of_scope":
+        conclusion = report["summary"]
+    elif measurements:
+        conclusion = measurements[0]["text"]
+    elif observations:
+        conclusion = f"Доступные наблюдения по вопросу: {len(observations)}."
+    else:
+        conclusion = "По выбранным источникам данных для ответа недостаточно."
+    if not focus and hypotheses and report["llm_status"] == "ok":
+        conclusion = f"{conclusion} Гипотеза: {hypotheses[0]['cause']}"
+    return {
+        "run_id": report["run_id"],
+        "answer": conclusion,
+        "llm_status": report["llm_status"],
+        "data_mode": report["data_mode"],
+        "notice": report.get("notice", ""),
+        "measurements": measurements,
+        "observations": observations,
+        "sources": evidence,
+        "sources_status": report["sources_status"],
+        "findings": report["findings"],
+        "hypotheses": hypotheses,
+        "next_step": report["recommended_actions"][0] if hypotheses else None,
+        "effect_plan": report["effect_plan"],
+        "limitations": report["limitations"],
+        "trace": [event for event in report["trace"] if event["step"] not in HIDDEN_PHASES],
+        "drafts": report["proposed_tasks"],
+        "usage": report["usage"],
+        "seconds": report["seconds"],
+    }
+
+
+def measurement(item):
+    values = item["values"]
+    kind = item["kind"]
+    if kind == "orders":
+        delta = values["delta"]
+        text = (f"{item['ref']}: изменение индекса {delta:+.1f}%."
+                if delta is not None else f"{item['ref']}: сравнение индекса недоступно.")
+    elif kind == "funnel":
+        segment = {"desktop": "компьютеры", "mobile": "телефоны"}.get(
+            item["filter"]["segment"], item["filter"]["segment"],
+        )
+        rate = values["rate"]
+        measure = f"{values['num']}/{values['den']} ({rate:.1f}%)" if rate is not None else "доля неизвестна"
+        text = f"Выбор опции, {segment}: {measure}, покрытие {values['days']}/{values['total']} дней."
+    elif kind == "historical_metric":
+        window = " — ".join(item["period"])
+        value = values["value"]
+        text = (f"{item['ref']}, {window}: {value:g} {item['unit']}."
+                if value is not None else f"{item['ref']}, {window}: полные данные отсутствуют.")
+    elif kind == "historical_comparison":
+        delta = values["delta_percent"]
+        text = (f"{item['ref']}: изменение между историческими окнами {delta:+.1f}%."
+                if delta is not None else f"{item['ref']}: относительное изменение недоступно.")
+    else:
+        text = EFFECT_LABELS.get(values["status"], "Статус оценки недоступен") + "."
+    return {"evidence_id": item["id"], "text": text}

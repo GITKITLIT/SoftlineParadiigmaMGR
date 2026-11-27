@@ -1,0 +1,206 @@
+--- a/app.py
++++ b/app.py
+@@ -20,11 +20,21 @@
+     return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+-def page(data=None):
++def qwen_chat_enabled():
++    return os.getenv("PM_QWEN_CHAT_ENABLED", "").lower() == "true"
++
++
++def page(data=None, *, qwen_chat=False):
+     data = data or overview()
+     benchmark = os.getenv("PM_BENCHMARK")
+     example = json.loads(Path(benchmark).read_text(encoding="utf-8-sig")) if benchmark else None
+     html = (ROOT / "web/index.html").read_text(encoding="utf8")
++    if qwen_chat:
++        component = ROOT / "llm_lab/integration"
++        html = html.replace("</style>", (component / "chat.css").read_text(encoding="utf8") + "</style>", 1)
++        html = html.replace('<script type="application/json"',
++                            (component / "chat.html").read_text(encoding="utf8") + '<script type="application/json"', 1)
++        html = html.replace("</html>", "<script>" + (component / "chat.js").read_text(encoding="utf8") + "</script></html>", 1)
+     return (
+         html.replace("/*STYLE*/", (ROOT / "web/style.css").read_text(encoding="utf8"))
+         .replace("/*SCRIPT*/", (ROOT / "web/app.js").read_text(encoding="utf8"))
+@@ -151,11 +161,13 @@
+             and self.headers.get("Origin", "http://" + host) == "http://" + host
+         )
+
+-    def reply(self, status, ctype, body):
++    def reply(self, status, ctype, body, *, cookie=None):
+         self.send_response(status)
+         self.send_header("Content-Type", ctype)
+         self.send_header("Cache-Control", "no-store")
+         self.send_header("X-Content-Type-Options", "nosniff")
++        if cookie:
++            self.send_header("Set-Cookie", cookie)
+         self.send_header("Content-Length", str(len(body)))
+         self.end_headers()
+         self.wfile.write(body)
+@@ -166,7 +178,7 @@
+             return
+         path = urlsplit(self.path).path
+         if path == "/":
+-            self.reply(200, "text/html; charset=utf-8", page().encode())
++            self.reply(200, "text/html; charset=utf-8", page(qwen_chat=qwen_chat_enabled()).encode())
+         elif path == "/cost.xlsx" and (ROOT / "build/cost.xlsx").is_file():
+             self.reply(
+                 200,
+@@ -177,7 +189,7 @@
+             self.reply(404, "text/plain", b"Not found")
+
+     def do_POST(self):
+-        status = 200
++        status, cookie = 200, None
+         try:
+             if not self.is_local():
+                 self.reply(403, "text/plain", b"Local requests only")
+@@ -190,7 +202,14 @@
+             body = json.loads(self.rfile.read(n))
+             if not isinstance(body, dict):
+                 raise ValueError("Требуется объект")
+-            result = api(urlsplit(self.path).path, body)
++            path = urlsplit(self.path).path
++            if path.startswith("/api/qwen/") and qwen_chat_enabled():
++                from llm_lab.integration import chat_api
++                action = path.removeprefix("/api/qwen/")
++                owner, cookie = chat_api.local_owner(self, create=action == "new")
++                result = chat_api.route(action, owner, body)
++            else:
++                result = api(path, body)
+         except sqlite3.Error:
+             status = 503
+             result = {"error": "Локальное хранилище временно недоступно."}
+@@ -201,7 +220,7 @@
+                 if isinstance(error, ValueError)
+                 else "Проверьте поля запроса и входные данные"
+             }
+-        self.reply(status, "application/json; charset=utf-8", as_json(result).encode())
++        self.reply(status, "application/json; charset=utf-8", as_json(result).encode(), cookie=cookie if status == 200 else None)
+
+     def log_message(self, format, *args):
+         pass
+@@ -238,6 +257,9 @@
+         overview()
+         with ai_store.database():
+             pass
++        if qwen_chat_enabled():
++            from llm_lab.integration import chat_api
++            chat_api.install()
+         print(f"ParadiigmaMGR: http://127.0.0.1:{args.port}", flush=True)
+         with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as httpd:
+             from pm import collection
+--- a/pm/ai_store.py
++++ b/pm/ai_store.py
+@@ -150,7 +150,7 @@
+         ]
+
+
+-def decide(request):
++def decide(request, *, source_report=None, edited=None):
+     import hashlib
+     from uuid import uuid4
+     from .analytics import finite
+@@ -186,7 +186,9 @@
+         stop_if_below = finite(stop_if_below)
+         if action != "accept" or stop_if_below > target:
+             raise ValueError("Порог остановки должен быть не выше цели")
+-    report = run(run_id)
++    report = run(run_id) if source_report is None else source_report
++    if report["run_id"] != run_id:
++        raise ValueError("Проверьте идентификатор расследования")
+     proposal = next((p for p in report["proposed_tasks"] if p["id"] == proposal_id), None)
+     if proposal is None:
+         raise ValueError("Предложение не найдено")
+@@ -200,6 +202,8 @@
+         identity.extend([stop_if_below, guards])
+     if reason:
+         identity.append({"reason": reason})
++    if edited:
++        identity.append({"edited": edited})
+     fingerprint = hashlib.sha256(dumps(identity).encode()).hexdigest()
+     with database() as db:
+         previous = db.execute("SELECT fingerprint, task_id FROM idempotency WHERE key=?", (key,)).fetchone()
+@@ -211,7 +215,12 @@
+             if record["fingerprint"] != fingerprint:
+                 raise ValueError("Предложение уже рассмотрено")
+         else:
+-            record = proposal | dict(
++            if source_report is not None:
++                from .memory import record_investigation, safe_data
++                shared = safe_data(source_report)
++                db.execute("INSERT INTO runs VALUES (?, ?, ?)", (run_id, now(), dumps(shared)))
++                record_investigation(db, shared)
++            record = proposal | (edited or {}) | dict(
+                 id=uuid4().hex, run_id=run_id, proposal_id=proposal_id, decision=action,
+                 effect_plan=plan | {"target": target, "control_min": guardrail, "stop_if_below": stop_if_below,
+                                     "guardrail_metrics": guards},
+--- a/web/index.html
++++ b/web/index.html
+@@ -1,6 +1,6 @@
+ <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
+ <header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#productMemory">База знаний</a><a href="#settingsPanel">Настройки</a></nav></header>
+-<main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p>
++<main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p><section id="qwen-release" class="panel" hidden></section>
+ <section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
+ <section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
+ <details><summary>Настроить сравнение</summary><form id="settings"><div class="grid dates"><label>Начало базы<input type="date" name="before_start" required></label><label>Последняя неделя базы<input type="date" name="before_end" required></label><label>Начало после релиза<input type="date" name="after_start" required></label><label>Последняя полная неделя<input type="date" name="after_end" required></label><label>Метрика<select name="metric"><option value="orders_index">Недельный индекс</option><option value="orders_index_4w">Скользящий индекс за 4 недели</option></select></label><label>Порог падения, %<input name="alert_percent" type="number" min="0" max="100" step=".1" required></label></div><button>Пересчитать</button></form></details></section>
+@@ -52,6 +52,7 @@
+ <label>Второе окно с<input name="afterStart" type="date" required></label>
+ <label>Второе окно до<input name="afterEnd" type="date" required></label></div>
+ <button>Сравнить периоды</button><button type="button" id="memoryAsk" class="secondary">Исследовать с агентом</button>
++<button type="button" id="memoryChat" class="secondary" hidden>Спросить в чате</button>
+ <button type="button" id="memoryCompetitors" class="secondary">Изменения цен за второе окно</button>
+ <button type="button" id="memoryTimeline" class="secondary">История выбранного ряда</button></form>
+ <div id="memoryResult" aria-live="polite"></div>
+--- a/web/app.js
++++ b/web/app.js
+@@ -517,6 +517,8 @@
+   }
+ };
+ function renderInvestigation(report) {
++  const isRelease = report?.evidence.some((item) => item.id === "release:current" && item.ref === data.release_id);
++  if (isRelease) document.dispatchEvent(new CustomEvent("qwen-release-report", {detail: report.run_id}));
+   const container = $("#runDetails");
+   container.replaceChildren();
+   text("#runSummary", report ? report.summary : "Собираем доказательства…");
+@@ -782,6 +784,11 @@
+         if (item.latest_review) status.textContent = effectReviewText(item.latest_review);
+         row.append(label, status);
+       }
++      if (window.qwenAskWithScope && item.decision === "accept") {
++        const ask = node("button", "Обсудить эффект в чате");
++        ask.onclick = () => window.qwenAskWithScope("Какой эффект показала согласованная задача?", {task_id: item.id});
++        row.append(ask);
++      }
+       tasks.append(row);
+     }
+   } catch (error) {
+@@ -1144,6 +1151,26 @@
+   $("#agent").scrollIntoView();
+   $("#infer").click();
+ };
++$("#memoryChat").onclick = () => {
++  if (!$("#memoryCompare").reportValidity()) return;
++  const options = memoryComparison();
++  window.qwenAskWithScope("Сравни выбранные исторические периоды", {memory: {mode: options.mode, compare: options}});
++};
++window.qwenCore = {
++  releaseId: () => data.release_id,
++  scope() {
++    const scope = {config: data.config};
++    if ($("#includeMeter").checked) {
++      scope.metrika = $("#compareMeter").checked ? {compare: true} : values($("#meter"));
++    }
++    if ($("#publicProduct").value) {
++      const selected = (id) => Array.from($(id).selectedOptions, (item) => item.value);
++      scope.web = {product: $("#publicProduct").value, domains: selected("#publicDomains"), topics: selected("#publicTopics")};
++    }
++    return scope;
++  },
++};
++document.addEventListener("qwen-backlog-updated", () => $("#reloadRuns").click());
+ $("#memoryCompetitors").onclick = async () => {
+   try {
+     const input = memoryComparison();
