@@ -51,6 +51,9 @@ def sync_directory(directory):
 def run(database, vault, status, days):
     if not 1 <= days <= 3650:
         raise ValueError("Retention must be 1..3650 days")
+    database = core.external_input(database)
+    if not database.is_file():
+        raise ValueError("Backup source is unavailable")
     # Serialize capture, publication and retention for timer and operator runs.
     with (vault / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -63,6 +66,7 @@ def run(database, vault, status, days):
         try:
             legacy = database.parent / "sources.json"
             documents = [legacy] if os.path.lexists(legacy) else []
+            before = core.migration_state(database)
             captured, manifest = core.create(database, work, documents)
             drill = core.restore(captured, work / "drill")
             for name in [*manifest["files"], "manifest.json"]:
@@ -80,6 +84,8 @@ def run(database, vault, status, days):
                 "status": "ok", "last_backup": manifest["created"],
                 "last_integrity_check": manifest["verified"],
                 "last_restore_check": core.utc(), "restore_seconds": drill["restore_seconds"],
+                "snapshot_id": final.name,
+                **core.migration_fields(database, before, manifest["sqlite_version"]),
             })
             return final
         finally:

@@ -74,6 +74,9 @@ check_backend() {
     done
     return 1
 }
+database_schema() {
+    runuser -u pm-app -- /usr/bin/python3 -c 'import sqlite3; print(sqlite3.connect("file:/var/lib/paradiigma/db/ai.sqlite3?mode=ro",uri=True).execute("PRAGMA user_version").fetchone()[0])'
+}
 if [[ $old == "$release" ]]; then
     systemctl enable --now paradiigma.service
     check_backend || fail 'Existing release health check failed'
@@ -87,11 +90,15 @@ recover() {
         systemctl stop paradiigma.service || true
         if [[ -n $old ]]; then
             if select_release "$old"; then
-                systemctl reset-failed paradiigma.service || true
-                systemctl start paradiigma.service && check_backend ||
-                    echo 'Backend recovery failed. Keep ingress closed and follow disaster_recovery.md.' >&2
-                bash "$old/scripts/deploy/install-backup.sh" ||
-                    echo 'Backup service configuration recovery failed' >&2
+                if [[ $(database_schema) == "$(cat "$old/.schema")" ]]; then
+                    systemctl reset-failed paradiigma.service || true
+                    systemctl start paradiigma.service && check_backend ||
+                        echo 'Backend recovery failed. Keep ingress closed and follow disaster_recovery.md.' >&2
+                    bash "$old/scripts/deploy/install-backup.sh" ||
+                        echo 'Backup service configuration recovery failed' >&2
+                else
+                    echo 'Previous release requires its matching pre-migration snapshot. Keep ingress closed.' >&2
+                fi
             else
                 echo 'Release pointer recovery failed. Follow disaster_recovery.md.' >&2
             fi
@@ -109,7 +116,7 @@ if [[ -n $old ]]; then
     systemctl stop paradiigma.service
     systemctl start paradiigma-backup.service
     # The automatic path only handles schema-compatible releases. Migrations require an approved DR window.
-    installed_schema=$(runuser -u pm-app -- /usr/bin/python3 -c 'import sqlite3; print(sqlite3.connect("file:/var/lib/paradiigma/db/ai.sqlite3?mode=ro",uri=True).execute("PRAGMA user_version").fetchone()[0])')
+    installed_schema=$(database_schema)
     candidate_schema=$(cat "$release/.schema")
     [[ $installed_schema == "$candidate_schema" ]] || fail 'Schema change requires an administrator-led migration'
 fi

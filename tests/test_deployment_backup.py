@@ -52,6 +52,9 @@ class BackupTests(unittest.TestCase):
         status = json.loads(self.status.read_text())
         self.assertEqual(status["status"], "ok")
         self.assertIn("last_restore_check", status)
+        self.assertEqual(status["snapshot_id"], snap.name)
+        self.assertEqual(status["source_schema"], 1)
+        self.assertIs(status["source_quiescent"], False)
         self.assertNotIn("synthetic", self.status.read_text())
 
     def test_crc_failure_before_publication_preserves_recovery_point(self):

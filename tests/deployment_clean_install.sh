@@ -116,4 +116,5 @@ with sqlite3.connect("file:/var/lib/paradiigma/db/ai.sqlite3?mode=ro", uri=True)
     assert db.execute("SELECT count(*) FROM imported_evidence WHERE body LIKE '%Synthetic post-snapshot content.%'").fetchone()[0] == 0
 PY
 runuser -u pm-app -- /usr/bin/python3 /opt/paradiigma/current/scripts/deploy/health.py
+install -m 0600 /dev/null /run/paradiigma-disposable-acceptance
 echo 'Clean install, retry, failed update, rollback, backup isolation and actual restore OK'

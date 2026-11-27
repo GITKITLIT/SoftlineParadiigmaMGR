@@ -33,6 +33,8 @@ class ReleaseConfiguration(unittest.TestCase):
     def test_demo_rejects_tokens_files_and_untrusted_endpoint(self):
         for settings in ({"METRIKA_TOKEN": "fixture", "METRIKA_COUNTER_ID": "4"},
                          {"YANDEX_SEARCH_ENABLED": "true"}, {"PM_EVIDENCE": str(self.root)},
+                         {"PM_EMAIL_ENABLED": "true"}, {"PM_SMTP_PASSWORD": "fixture"},
+                         {"PM_MIGRATION_STATUS_FILE": str(self.root / "status.json")},
                          {"PM_LLM_URL": "https://external.invalid/"},
                          {"PM_PRIVATE_DIR": "."}):
             with self.subTest(keys=list(settings)), patch.dict(os.environ, settings), self.assertRaises(ValueError):

@@ -64,6 +64,8 @@ jobs:
         run: sudo bash tests/deployment_ssh_tunnel.sh --disposable-vm
       - name: Test isolated Linux backup permissions
         run: sudo python3 -m unittest discover -s tests -p test_deployment_backup.py -v
+      - name: Rehearse Core v6, SMTP and restore on disposable state
+        run: sudo bash tests/deployment_core_v6.sh --disposable-vm
       - name: Show synthetic service failures
         if: failure()
         run: |
