@@ -736,9 +736,17 @@ async function reloadRuns() {
     const [journal, backlog] = await Promise.all([api("analysis/journal", {}), api("tasks", {})]);
     const history = $("#runHistory"), tasks = $("#serverTasks");
     history.replaceChildren(node("h4", "Последние расследования"));
+    const emailStatuses = {
+      disabled: "отключена", configuration_error: "проверьте настройки",
+      blocked_test_mode: "доступна только для синтетических данных", pending: "в очереди",
+      retry: "ожидает повтора", sending: "отправляется", submitted: "принято SMTP",
+      failed: "ошибка отправки", uncertain: "результат неизвестен", expired: "срок отправки истёк",
+    };
     for (const item of journal.notifications || []) {
       if (item.status !== "ready") continue;
-      const alert = node("p", "Сигнал мониторинга · " + item.created.slice(0, 10));
+      const mail = emailStatuses[item.email_status];
+      const alert = node("p", "Сигнал мониторинга · " + item.created.slice(0, 10) +
+        (mail ? " · почта " + mail : ""));
       const link = node("button", "Отчёт по сигналу");
       link.onclick = async () => {
         try { renderInvestigation(await api("analysis/report", { run_id: item.run_id })); }
@@ -758,7 +766,8 @@ async function reloadRuns() {
     tasks.replaceChildren(node("h4", "Локальный бэклог"));
     for (const item of backlog.tasks) {
       const row = node("article", "");
-      row.append(node("p", item.title + " · " + (item.decision === "accept" ? "согласована" : "отклонена")));
+      row.append(node("p", [item.title, item.decision === "accept" ? "согласована" : "отклонена",
+        item.tag].filter(Boolean).join(" · ")));
       if (item.decision === "accept") {
         const label = node("label", item.data_mode === "synthetic" ? "JSON для симуляции" : "JSON с наблюдениями");
         const file = document.createElement("input");
@@ -1167,3 +1176,14 @@ $("#memoryTimeline").onclick = async () => {
     $("#memoryResult").replaceChildren(...(rows.length ? rows : [node("p", "Наблюдений за окно нет.")]));
   } catch (error) { text("#memoryResult", error.message); }
 };
+
+async function openLinkedReport() {
+  const match = /^#report=([0-9a-f]{32})$/.exec(location.hash);
+  if (offline || !match) return;
+  try {
+    renderInvestigation(await api("analysis/report", {run_id: match[1]}));
+    $("#agent").scrollIntoView();
+  } catch (error) { flash(error.message); }
+}
+window.addEventListener("hashchange", openLinkedReport);
+openLinkedReport();

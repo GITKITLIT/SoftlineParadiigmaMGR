@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from .settings import private_dir
 
 TASK_TAG = "сгенерирована ИИ-помощником"
+SCHEMA_VERSION = 6
 
 
 def dumps(value):
@@ -22,7 +23,7 @@ def now():
 
 def require_migration_snapshot(path, version):
     marker = os.getenv("PM_MIGRATION_STATUS_FILE")
-    if not marker or version == 0 or version >= 5:
+    if not marker or version == 0 or version >= SCHEMA_VERSION:
         return
     file = Path(marker).resolve()
     try:
@@ -57,7 +58,7 @@ def database():
             db.execute(f"PRAGMA max_page_count={mib * 1048576 // page_size}")
         db.execute("BEGIN IMMEDIATE")
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5):
+        if not 0 <= version <= SCHEMA_VERSION:
             raise ValueError("Версия хранилища неизвестна")
         require_migration_snapshot(path, version)
         if version == 0:
@@ -99,6 +100,17 @@ def database():
                     "SELECT body FROM imported_evidence WHERE collection=? ORDER BY rowid", (row["collection"],))]
                 document_version(db, row["collection"], items)
             db.execute("PRAGMA user_version=5")
+        if version < 6:
+            db.execute("""CREATE TABLE email_outbox (
+                id TEXT PRIMARY KEY, investigation_id TEXT UNIQUE REFERENCES investigation_queue(id),
+                created TEXT NOT NULL, status TEXT NOT NULL, destination TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0, next_at TEXT, reason TEXT
+            )""")
+            db.execute("CREATE INDEX email_outbox_due ON email_outbox(status, next_at, created)")
+            db.execute("""CREATE TABLE email_daily_usage (
+                utc_day TEXT PRIMARY KEY, attempts INTEGER NOT NULL
+            )""")
+            db.execute("PRAGMA user_version=6")
         yield db
         db.commit()
     finally:
@@ -399,17 +411,23 @@ def claim_investigation(signature, max_daily):
 
 
 def complete_investigation(notification_id, run_id):
+    from . import email_notifications
+
     with database() as db:
-        db.execute("""UPDATE investigation_queue SET status=?, run_id=?, lease=NULL
-                      WHERE id=? AND status='running'""",
-                   ("ready" if run_id else "failed", run_id, notification_id))
+        updated = db.execute("""UPDATE investigation_queue SET status=?, run_id=?, lease=NULL
+                                WHERE id=? AND status='running'""",
+                             ("ready" if run_id else "failed", run_id, notification_id))
+        if updated.rowcount and run_id:
+            email_notifications.enqueue(db, notification_id, now(), investigation_id=notification_id)
 
 
 def notifications():
     with database() as db:
         return [dict(row) for row in db.execute("""
-            SELECT id, created, status, run_id FROM investigation_queue
-            ORDER BY created DESC LIMIT 20
+            SELECT q.id, q.created, q.status, q.run_id,
+                   e.status AS email_status, e.attempts AS email_attempts, e.reason AS email_reason
+            FROM investigation_queue AS q LEFT JOIN email_outbox AS e ON e.investigation_id=q.id
+            ORDER BY q.created DESC LIMIT 20
         """)]
 
 

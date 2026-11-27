@@ -1,10 +1,10 @@
-"""In-process periodic comparison. All scheduled work stays local."""
+"""In-process periodic comparison. Investigations run locally."""
 import hashlib
 import os
 import sqlite3
 import threading
 
-from . import ai_store, investigation
+from . import ai_store, email_notifications, investigation
 from .analytics import day, weeks
 from .service import overview, recalculate
 
@@ -65,6 +65,12 @@ def check(config, *, proactive=False, analyze=investigation.analyze):
         return result
     finally:
         ACTIVE.release()
+        if proactive:
+            try:
+                email_notifications.deliver_pending()
+            except (OSError, sqlite3.Error):
+                # A claimed delivery remains leased and expires as uncertain.
+                pass
 
 
 def start(seconds):

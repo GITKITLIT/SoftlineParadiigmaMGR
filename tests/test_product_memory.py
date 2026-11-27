@@ -171,7 +171,7 @@ class ProductMemoryTests(unittest.TestCase):
         restore_dir = self.folder / "restore"
         result = pim_backup.restore(backup, restore_dir)
         self.assertGreaterEqual(result["restore_seconds"], 0)
-        self.assertEqual(pim_backup.verify(backup)["sqlite_version"], 5)
+        self.assertEqual(pim_backup.verify(backup)["sqlite_version"], ai_store.SCHEMA_VERSION)
         with patch.dict(os.environ, {"PM_PRIVATE_DIR": str(restore_dir)}):
             latest = history.timeline({"mode": "synthetic", "series_id": initial_id,
                                        "period": ["2024-01-01", "2025-01-01"]})
@@ -305,10 +305,32 @@ class ProductMemoryTests(unittest.TestCase):
                     pass
             pim_backup.create(database, self.folder / "snapshots", status=status)
             with ai_store.database() as db:
-                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 5)
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], ai_store.SCHEMA_VERSION)
             offered = history.backup_status()
             self.assertEqual(set(offered), {"status", "last_backup", "last_integrity_check"})
             self.assertNotIn("source_mtime_ns", json.dumps(offered))
+
+    def test_email_migration_keeps_prior_journal_and_does_not_enqueue_old_reports(self):
+        from pm import monitor
+
+        with patch.dict(os.environ, {"PM_EMAIL_ENABLED": "false"}):
+            result = monitor.check({}, proactive=True)
+        with ai_store.database() as db:
+            db.execute("DROP TABLE email_outbox")
+            db.execute("DROP TABLE email_daily_usage")
+            db.execute("PRAGMA user_version=5")
+        source = self.active / pim_backup.DB_NAME
+        status = self.folder / "status.json"
+        with patch.dict(os.environ, {"PM_MIGRATION_STATUS_FILE": str(status)}):
+            with self.assertRaisesRegex(ValueError, "проверенной независимой"):
+                ai_store.notifications()
+            pim_backup.create(source, self.folder / "snapshots", status=status)
+            row = ai_store.notifications()[0]
+            self.assertEqual(row["run_id"], result["run_id"])
+            self.assertIsNone(row["email_status"])
+            with ai_store.database() as db:
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], ai_store.SCHEMA_VERSION)
+                self.assertEqual(db.execute("SELECT count(*) FROM email_outbox").fetchone()[0], 0)
 
     def test_rejected_decision_is_not_reproposed_without_new_evidence(self):
         request = {"query": "Почему упали заказы?"}

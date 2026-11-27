@@ -218,6 +218,7 @@ def main():
     build.add_argument("--workbook")
     build.add_argument("--config")
     build.add_argument("--output", default="build/index.html")
+    subs.add_parser("email-test", help="Отправить синтетическое тестовое письмо")
     imp = subs.add_parser("import")
     imp.add_argument("--file", required=True, type=Path)
     imp.add_argument("--kind", required=True)
@@ -228,6 +229,12 @@ def main():
     history_import.add_argument("--file", type=Path, required=True)
     history_import.add_argument("--mode", choices=("local", "synthetic"), required=True)
     args = p.parse_args()
+    if args.cmd == "email-test":
+        from pm.email_notifications import send_test
+
+        result = send_test()
+        print(as_json(result))
+        raise SystemExit(0 if result["status"] == "submitted" else 1)
     if args.cmd == "import-history":
         from pm.collection import ingest_file
         print(as_json(ingest_file(args.file, mode=args.mode)))
