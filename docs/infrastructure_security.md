@@ -36,8 +36,10 @@ Backend слушает IPv4 loopback на порту 8080. SQLite обслужи
 ```sh
 cd /opt/paradiigma/current
 domain=pm.example.org
-python3 scripts/deploy/render_proxy.py "$domain" --mode production > /tmp/paradiigma-site.conf
-sudo install -o root -g root -m 0644 /tmp/paradiigma-site.conf /etc/nginx/sites-available/paradiigma
+site_config=$(mktemp)
+python3 scripts/deploy/render_proxy.py "$domain" --mode production > "$site_config" &&
+    sudo install -o root -g root -m 0644 "$site_config" /etc/nginx/sites-available/paradiigma
+rm -- "$site_config"
 sudo ln -sfn /etc/nginx/sites-available/paradiigma /etc/nginx/sites-enabled/paradiigma
 sudo touch /etc/nginx/paradiigma.htpasswd
 sudo chown root:www-data /etc/nginx/paradiigma.htpasswd

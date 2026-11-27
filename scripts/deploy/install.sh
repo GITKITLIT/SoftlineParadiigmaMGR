@@ -25,7 +25,7 @@ getent group pm-db >/dev/null || groupadd --system pm-db
 for user in pm-app pm-qwen; do
     getent group "$user" >/dev/null || groupadd --system "$user"
     id "$user" >/dev/null 2>&1 || useradd --system --gid "$user" --shell /usr/sbin/nologin --home-dir /nonexistent --no-create-home "$user"
-    [[ $(id -u "$user") != 0 && $(id -gn "$user") == "$user" && $(getent passwd "$user" | cut -d: -f7) == /usr/sbin/nologin ]] || fail 'Unexpected service account'
+    [[ $(id -u "$user") != 0 && $(id -Gn "$user") == "$user" && $(getent passwd "$user" | cut -d: -f7) == /usr/sbin/nologin ]] || fail 'Unexpected service account'
 done
 install -d -o root -g root -m 0755 /var/lib/paradiigma
 install -d -o pm-app -g pm-db -m 2750 /var/lib/paradiigma/db
@@ -42,6 +42,8 @@ if [[ ! -f $release/.prepared ]]; then
     /usr/bin/python3 -m venv "$release/.venv"
     "$release/.venv/bin/python" -m pip --isolated install --disable-pip-version-check --require-hashes --only-binary=:all: -r "$release/deploy/requirements.lock"
     "$release/.venv/bin/python" -m pip check
+    env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+        "$release/.venv/bin/python" "$release/scripts/cost.py" --output "$release/build/cost.xlsx"
     runuser -u pm-app -- env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
         "$release/.venv/bin/python" "$release/scripts/deploy/check_candidate.py" > "$release/.schema"
     touch "$release/.prepared"
