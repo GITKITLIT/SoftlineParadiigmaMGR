@@ -10,7 +10,7 @@ id pm-backup >/dev/null 2>&1 || useradd --system --gid pm-backup --no-create-hom
 install -d -o pm-backup -g pm-backup -m 0700 /var/backups/paradiigma
 # The setgid parent gives atomically replaced 0640 status files the app group.
 install -d -o pm-backup -g pm-app -m 2750 /var/lib/paradiigma-backup-status
-for unit in run-paradiigma_backup_input.mount paradiigma-backup.service paradiigma-backup.timer; do
+for unit in run-paradiigma_backup_input.mount paradiigma-backup-reader.service paradiigma-backup.service paradiigma-backup.timer; do
     install -o root -g root -m 0644 "$base/deploy/systemd/$unit" "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload

@@ -61,7 +61,7 @@ if systemctl is-active --quiet "$timer"; then
     timer_active=1
     systemctl stop "$timer"
 fi
-systemctl stop paradiigma-backup.service
+systemctl stop paradiigma-backup.service paradiigma-backup-reader.service
 chown pm-backup:pm-backup "$stage"
 runuser -u pm-backup -- python3 -IB "$engine" restore-test --snapshot "$snapshot" --output "$stage/verified"
 chown root:root "$stage"

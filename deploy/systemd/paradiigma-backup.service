@@ -1,7 +1,7 @@
 [Unit]
 Description=Create and restore-test an independent PARADIIGMA snapshot
-Requires=run-paradiigma_backup_input.mount
-After=run-paradiigma_backup_input.mount
+Requires=run-paradiigma_backup_input.mount paradiigma-backup-reader.service
+After=run-paradiigma_backup_input.mount paradiigma-backup-reader.service
 RequiresMountsFor=/var/backups/paradiigma /opt/paradiigma/current
 
 [Service]

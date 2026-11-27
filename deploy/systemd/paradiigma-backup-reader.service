@@ -1,0 +1,26 @@
+[Unit]
+Description=Keep SQLite sidecars available during PARADIIGMA backup
+RequiresMountsFor=/var/lib/paradiigma/db /opt/paradiigma/current
+StopWhenUnneeded=yes
+
+[Service]
+Type=notify
+User=pm-app
+Group=pm-app
+SupplementaryGroups=pm-db
+UMask=0027
+ExecStart=/usr/bin/python3 -IB /opt/paradiigma/current/scripts/deploy/hold_backup_reader.py
+TimeoutStartSec=15
+TimeoutStopSec=10
+ProtectSystem=strict
+ReadWritePaths=/var/lib/paradiigma/db
+InaccessiblePaths=-/etc/paradiigma -/var/lib/paradiigma/documents -/var/lib/paradiigma/models -/var/lib/paradiigma-backup-status -/var/backups/paradiigma
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LimitCORE=0
