@@ -96,7 +96,7 @@ def main():
             run = state["run_id"]
             report = post("analysis/report", {"run_id": run})
             checks = scenarios.checks("drop", report)
-            selected = {step.get("tool") for step in report["trace"] if step["actor"] == "qwen"}
+            selected = {step.get("tool") for step in report["trace"] if step.get("actor") == "qwen"}
             checks.update(live=report["llm_status"] == "ok", selected={"sales", "funnel"} <= selected,
                           hypothesis=bool(report["hypotheses"]), draft=bool(report["proposed_tasks"]))
             record("drop", seconds, report, checks)
@@ -115,7 +115,7 @@ def main():
                 turn = json.loads(db.execute("SELECT body FROM qwen_turns WHERE dialog=?",
                                             (dialog,)).fetchone()[0])
             historical = turn["report"]
-            selected = {step.get("tool") for step in historical["trace"] if step["actor"] == "qwen"}
+            selected = {step.get("tool") for step in historical["trace"] if step.get("actor") == "qwen"}
             record("history", seconds, historical, scenarios.checks("history", historical) |
                    {"live_selection": "compare_history" in selected})
             os.environ["PM_LLM_URL"] = ""
