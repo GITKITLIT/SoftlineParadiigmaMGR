@@ -18,13 +18,31 @@ python app.py serve --port 8080
 
 В PowerShell создайте окружение командой `python -m venv .venv`, используйте `.venv\Scripts\python.exe` и задавайте переменные через `$env:ИМЯ`. Backend читает окружение процесса. `.env.example` служит шаблоном значений.
 
-Для Qwen запустите `python scripts/run_model.py --server "$LLAMA_SERVER" --model "$QWEN_GGUF"`. Лаунчер проверяет утверждённый SHA-256, использует loopback и включает лимит кеша 512 МиБ при поддержке флага. По умолчанию один слот на 8192 токенов. Для теста двух клиентов добавьте `--parallel 2`, для поддерживаемого Metal-профиля укажите `--gpu-layers 99`. В терминале Backend перед запуском задайте `PM_LLM_URL=http://127.0.0.1:18081/v1`, `PM_LLM_MODEL=qwen3-4b`, `PM_LLM_SELECT_STEP=true` и `PM_QWEN_QUALITATIVE=true`.
+Для Qwen запустите `python scripts/run_model.py --server "$LLAMA_SERVER" --model "$QWEN_GGUF"`. Лаунчер проверяет утверждённый SHA-256, использует loopback и включает лимит кеша 512 МиБ при поддержке флага. По умолчанию один слот на 8192 токенов. Для теста двух клиентов добавьте `--parallel 2`, для поддерживаемого Metal-профиля укажите `--gpu-layers 99`. В терминале Backend перед запуском задайте `PM_LLM_URL=http://127.0.0.1:18081/v1`, `PM_LLM_MODEL=qwen3-4b`, `PM_LLM_SELECT_STEP=true` и `PM_QWEN_QUALITATIVE=true`. Для воспроизведения профиля приёмки скопируйте `llm_lab/prompts/synthesis-grounded.ru.txt` в приватный каталог вне Git и укажите путь через `PM_LLM_PROMPT_FILE`. На VPS заранее установите разрешённый файл с правом чтения pm-app в каталоге документов.
 
 ```sh
 python scripts/qwen/evaluate.py --mode live --concurrent
 python scripts/qwen/historical_smoke.py --live
 python scripts/qwen/effect_smoke.py --live
 ```
+
+## Закрытая репетиция R-09
+
+Создайте новый `PM_PRIVATE_DIR` вне Git. Передайте утверждённую выгрузку v17 и конфигурацию кейса через `PM_WORKBOOK` и `PM_CASE_CONFIG`. Импортируйте разрешённые диапазоны интервью и конкурентного исследования. Для этой репетиции используйте loopback-модель, отключите Search, SMTP и тестовый счётчик.
+
+```sh
+python app.py import --file "$APPROVED_INTERVIEWS" --kind 'Интервью' \
+  --sheet "$INTERVIEW_SHEET" --range "$INTERVIEW_RANGE"
+python app.py import --file "$APPROVED_COMPETITOR_STUDY" --kind 'Конкуренты' \
+  --sheet "$COMPETITOR_SHEET" --range "$COMPETITOR_RANGE"
+python scripts/qwen/run_release.py \
+  --question 'Почему снизились заказы? Сверь контроль, воронку, релизы, интервью, конкурентов и бэклог.' \
+  --output "$PM_PRIVATE_DIR/r09-report.json"
+python scripts/qwen/audit_release.py --workbook "$PM_WORKBOOK" \
+  --case "$PM_CASE_CONFIG" --report "$PM_PRIVATE_DIR/r09-report.json"
+```
+
+Сверьте 11 проверок с исходными таблицами. Эталонный ответ используйте отдельно после сохранения отчёта. Храните документы, точные показатели и полученные отчёты в закрытом каталоге.
 
 ## Метрика
 
