@@ -1,0 +1,60 @@
+--- a/pm/live_runs.py
++++ b/pm/live_runs.py
+@@ -1,4 +1,5 @@
+ """Bounded in-process progress for browser investigations; final reports are durable."""
++import os
+ import sqlite3
+ from collections import OrderedDict
+ from threading import BoundedSemaphore, Lock, Thread
+@@ -58,7 +59,10 @@
+             JOBS.pop(identifier, None)
+         SLOTS.release()
+         raise ValueError("Не удалось запустить расследование") from None
+-    return {"job_id": identifier}
++    response = {"job_id": identifier}
++    if os.getenv("PM_QWEN_RUNTIME_PROFILE") == "sandy-bridge-one-slot":
++        response["wait_seconds"] = 600
++    return response
+
+
+ def status(identifier, *, private=False):
+--- a/llm_lab/integration/chat_api.py
++++ b/llm_lab/integration/chat_api.py
+@@ -126,9 +126,9 @@
+                 continue
+             if phase == "running" and pair == (owner, identifier):
+                 raise ValueError("Дождитесь текущего ответа в этом диалоге.")
+-        job = live_runs.start(body, analyze, private=True)["job_id"]
+-        JOBS[job] = owner, identifier
+-    return {"job_id": job}
++        job = live_runs.start(body, analyze, private=True)
++        JOBS[job["job_id"]] = owner, identifier
++    return job
+
+
+ def status(owner, identifier, job):
+--- a/web/app.js
++++ b/web/app.js
+@@ -447,7 +447,7 @@
+
+ async function runWithProgress(input) {
+   const job = await api("analysis/start", input);
+-  const deadline = Date.now() + 270000;
++  const deadline = Date.now() + (job.wait_seconds ?? 270) * 1000;
+   const names = {sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
+     research: "Исследования", competitors: "Конкуренты", metrika: "Метрика",
+     public_competitors: "Публичные источники", effect: "Эффект", compare_history: "Сравнение периодов",
+--- a/llm_lab/integration/chat.js
++++ b/llm_lab/integration/chat.js
+@@ -377,9 +377,9 @@
+     try {
+       if (!dialogId) await createDialog();
+       const scope = window.qwenCore.scope();
+-      const {job_id} = await request("start", {dialog_id: dialogId, question, mode: mode.value,
++      const {job_id, wait_seconds} = await request("start", {dialog_id: dialogId, question, mode: mode.value,
+         scope: {...scope, ...selectedScope}});
+-      const deadline = Date.now() + 270000;
++      const deadline = Date.now() + (wait_seconds ?? 270) * 1000;
+       while (Date.now() < deadline) {
+         const state = await request("status", {dialog_id: dialogId, job_id});
+         if (state.status === "ready") {
