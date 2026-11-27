@@ -1,0 +1,25 @@
+{
+  "investigation_seconds": 88.261,
+  "model_tools": [
+    "sales",
+    "funnel",
+    "competitors",
+    "research",
+    "releases"
+  ],
+  "hypotheses": 1,
+  "notification": "submitted",
+  "smtp_messages": 1,
+  "tag": "сгенерирована ИИ-помощником",
+  "target": 110,
+  "redmine_action": "new_issue",
+  "simulation": "achieved",
+  "simulated_index": 120,
+  "history_delta": 5.0,
+  "history_live_tools": [
+    "compare_history"
+  ],
+  "history_live_seconds": 6.682,
+  "follow_up_saved_plan": true,
+  "reopen_without_model": true
+}
