@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from pm.search_security import TOPIC_TERMS
 from pm.web_search import _collect, collect_competitor_evidence
+from pm.yandex_search.snapshots import estimate_cost
 from scripts.search_import_competitors import private_json_target, write_private_json
 
 OFFLINE_INPUT = {"product": "Демо Pro", "domains": ["example.com"], "topics": ["licensing"]}
@@ -66,6 +67,8 @@ def main():
             parser.error("--product, --domain и --topic задаются только с --live")
         result = offline_search()
     report = {"mode": "live" if args.live else "offline", **result}
+    if args.live:
+        report["cost"] = estimate_cost(result)
     if args.snapshot:
         try:
             write_private_json(args.snapshot, report)

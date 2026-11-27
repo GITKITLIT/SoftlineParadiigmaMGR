@@ -75,12 +75,19 @@ def _inspect_zip(archive):
 
 def _record(path, locator, text, metadata, **provenance):
     key = hashlib.sha256(f"{path.name}\0{locator}\0{text}".encode()).hexdigest()[:24]
+    locator_fields = {name: value for name, value in provenance.items() if name in {"sheet", "slide"}}
+    if provenance.get("range"):
+        locator_fields["cell"] = provenance["range"]
+    if "table" in provenance:
+        locator_fields["part"] = f"таблица {provenance['table']}, строка {provenance['row']}"
     return {
         "id": "competitor:" + key,
         "ref": f"{path.name} · {locator}",
         "kind": "Конкуренты",
         "text": text[:2000],
         "provenance": {"file": path.name, **provenance},
+        "locator": {"file": path.name, **locator_fields},
+        "observed_at": metadata.get("study_date"),
         **metadata,
     }
 

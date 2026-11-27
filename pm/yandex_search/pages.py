@@ -13,6 +13,8 @@ from itertools import islice
 from urllib.parse import unquote, urljoin, urlsplit
 
 from .client import SearchFailure, _retry_after, bounded_body, response_deadline
+from .comparison import _TERMS, _offer
+from .market_matrix import record_day
 from .page_extract import extract_page
 from .page_policy import BOT, Robots, checked_page_url, parse_robots, resolve_public
 from .parsing import utc_stamp
@@ -211,6 +213,25 @@ def _cached_page(reader, url, source, config, store, warnings):
         return record
 
 
+def verified_price(attributes, conflicts, now):
+    if set(conflicts) & set((*_TERMS, "price", "subscription", "price_valid_until")):
+        return {}
+    expiry = record_day(attributes.get("price_valid_until"))
+    terms = _offer(attributes)
+    if not all(terms[key] for key in (*_TERMS, "price")) or (expiry and expiry < now.date()):
+        return {}
+    parts = [terms[key] for key in _TERMS if key != "currency"]
+    if terms["subscription"]:
+        parts.append(terms["subscription"])
+    description = " | ".join(parts)
+    if len(description) > 350:
+        return {}
+    return {
+        "metric": "price", "value": float(terms["price"]), "currency": terms["currency"].upper(),
+        "terms": description,
+    }
+
+
 def augment_pages(result, *, page_config, search_config, store):
     reader = PageReader(page_config, store, search_config.api_key)
     result["page_usage"] = reader.usage
@@ -252,6 +273,7 @@ def augment_pages(result, *, page_config, search_config, store):
                 "text": text[:2000], "retrieved_at": page["retrieved_at"], "published_at": None,
                 "content_type": "page_excerpt", "topic": source["topic"], "query": source["query"],
                 "product": source["product"], "attributes": attrs, "attribute_conflicts": conflicts,
+                "offer": verified_price(attrs, conflicts, now_utc()),
                 "provenance": {
                     "discovered_url": source["url"], "method": "static_html",
                     "search_evidence_ids": [], "checked_sections": len(fragments),

@@ -139,6 +139,14 @@ class PageIntegrationTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["content_type"], "snippet")
         self.request.assert_called_once()
 
+    def test_configured_host_outside_run_scope_cannot_receive_redirect(self):
+        self.env["YANDEX_SEARCH_PAGE_ALLOWED_DOMAINS"] = '["example.com","shop.example.com"]'
+        self.request.side_effect = [(404, None, None), (302, "https://shop.example.com/product", None)]
+        result = collect_competitor_evidence(**self.args)
+        self.assertIn("page_url_rejected", result["warnings"])
+        self.resolve.assert_called_once_with("example.com")
+        self.assertEqual(self.request.call_count, 2)
+
     def test_unlisted_redirect_cannot_resolve_or_send(self):
         self.request.side_effect = [(404, None, None), (302, "https://unexpected.example.net/p", None)]
         result = collect_competitor_evidence(**self.args)

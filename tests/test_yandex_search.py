@@ -294,6 +294,19 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(sum(result["usage"]["cache_hits"] for result in results), 5)
         self.request.assert_called_once()
 
+    def test_cached_urls_are_rechecked_against_current_privacy_policy(self):
+        self.assertEqual(self.call()["status"], "ok")
+        with closing(sqlite3.connect(self.directory / "yandex-search.sqlite3")) as db, db:
+            key, encoded_payload = db.execute("SELECT key, payload FROM cache").fetchone()
+            collection, notes = json.loads(encoded_payload)
+            collection[0]["url"] += "?session=synthetic"
+            collection[0]["ref"] = collection[0]["url"]
+            db.execute("UPDATE cache SET payload = ? WHERE key = ?", (json.dumps([collection, notes]), key))
+        result = self.call()
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["warnings"], ["result_filtered"])
+        self.assertEqual(result["usage"], {"requests": 0, "cache_hits": 1})
+
     def test_corrupted_cached_shape_is_a_safe_error(self):
         self.assertEqual(self.call()["status"], "ok")
         with closing(sqlite3.connect(self.directory / "yandex-search.sqlite3")) as db, db:

@@ -246,6 +246,15 @@ def _compact_evidence(source):
     }
 
 
+def _historical_source(source):
+    item = _compact_evidence(source)
+    item.update({
+        key: source[key] for key in ("url", "retrieved_at", "imported_at", "study_date", "provenance")
+        if source.get(key) is not None
+    })
+    return item
+
+
 def build_market_matrix(
     *, sources, own_source, offer, as_of, aliases, max_competitors, max_sources, product,
 ):
@@ -253,7 +262,7 @@ def build_market_matrix(
     buyers = defaultdict(list)
     display_names = {}
     for source, data in sources:
-        lookup[source["id"]] = _compact_evidence(source)
+        lookup[source["id"]] = _historical_source(source)
         name = _short(source.get("domain") or data.get("competitor"))
         if not name:
             continue
@@ -262,7 +271,7 @@ def build_market_matrix(
         display_names.setdefault(key, name)
         buyers[key].append((source, data))
     if own_source:
-        lookup[own_source[0]["id"]] = _compact_evidence(own_source[0])
+        lookup[own_source[0]["id"]] = _historical_source(own_source[0])
     keys = sorted(buyers, key=lambda key: (
         -max(_QUALITY[source["scope"]] for source, _ in buyers[key]), display_names[key].casefold(),
     ))[:max_competitors]
@@ -318,7 +327,8 @@ def build_market_matrix(
                 {field: entry[field] for field in ("value", "as_of", "status", "fact_evidence_ids")}
                 for entry in current["alternatives"]
             ]
-        extras = {key: lookup[key] for key in ids if key not in selected}
+        extras = {key: {field: lookup[key][field] for field in ("id", "ref", "scope", "as_of", "excerpt")}
+                  for key in ids if key not in selected}
         serialized = json.dumps([comparison, list(extras.values())], ensure_ascii=False)
         size = len(serialized.encode("utf-8"))
         if payload_bytes + size > 12_000:

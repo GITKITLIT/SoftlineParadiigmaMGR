@@ -3,8 +3,10 @@
 import sqlite3
 import time
 from contextlib import nullcontext
+from dataclasses import replace
+from urllib.parse import unquote
 
-from .search_security import public_queries
+from .search_security import public_queries, source_url
 from .yandex_search.client import SearchFailure, request_once, retry_delay
 from .yandex_search.config import Config, enabled
 from .yandex_search.page_policy import PageConfig
@@ -79,7 +81,17 @@ def _resolve_query(store, config, result, product, query_info, stop_live, smoke,
                 result["warnings"].append("expired_cache")
             if cached is not None:
                 result["usage"]["cache_hits"] += 1
-                return cached
+                items, notes = cached
+                accepted = [
+                    item for item in items
+                    if source_url(item["url"], domain) == item["url"] == item["ref"]
+                    and item["domain"] == domain and item["topic"] == topic
+                    and item["query"] == query and item["product"] == product
+                    and not any(config.api_key in value for value in (
+                        unquote(item["url"]), item["title"], item["text"],
+                    ))
+                ]
+                return accepted, notes + ["result_filtered"] if len(accepted) != len(items) else notes
         if stop_live is not None:
             raise stop_live
         items, notes, fetched = _search(
@@ -177,7 +189,10 @@ def _run(result, *, product, domains, topics, smoke):
         else:
             if page_config:
                 from .yandex_search.pages import augment_pages
-                augment_pages(result, page_config=page_config, search_config=config, store=store)
+                scoped = page_config.domains.intersection(domain for domain, _, _ in queries)
+                if scoped:
+                    augment_pages(result, page_config=replace(page_config, domains=scoped),
+                                  search_config=config, store=store)
     return result
 
 

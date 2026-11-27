@@ -21,6 +21,9 @@ TOPIC_SYNONYMS = {
 MAX_INPUT_ITEMS = 50
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.ASCII)
 _RESERVED_SUFFIXES = {"localhost", "local", "internal", "invalid", "test", "example", "onion"}
+_PRIVATE_PARAMETERS = {
+    "token", "access_token", "api_key", "password", "signature", "session", "authorization",
+}
 
 
 def domain_name(value: str) -> str:
@@ -110,6 +113,9 @@ def source_url(value: str, expected_domain: str) -> str | None:
         ):
             return None
     except ValueError:
+        return None
+    if any(unquote(field.partition("=")[0]).casefold() in _PRIVATE_PARAMETERS
+           for field in re.split(r"[&;]", parts.query)):
         return None
     return urlunsplit((parts.scheme, host, parts.path or "/", parts.query, ""))
 

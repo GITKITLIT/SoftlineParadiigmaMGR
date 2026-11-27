@@ -89,6 +89,7 @@ def capture(*, history, plan, mode, provider, local, own=None, aliases=None, int
         snapshot["plan"] = plan
         previous = history.latest(scope, usable=True)
         changes = compare_snapshots(previous, snapshot, price_threshold_pct=price_threshold_pct)
+        snapshot["changes_from_previous"] = changes
         usable = result["status"] == "ok" or (mode == "offline" and bool(local))
         history.finish(scope, token, snapshot, usable=usable)
     except BaseException:
