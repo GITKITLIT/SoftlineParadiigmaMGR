@@ -179,10 +179,16 @@
     if (item.values) row.append(element("p", Object.entries(item.values).map(([key, value]) =>
       key + " · " + (value == null ? "нет данных" : JSON.stringify(value))).join(" / ")));
     if (item.kind === "competitor_web" && typeof item.locator === "string") {
+      const labels = {product: "Продукт", version: "Редакция", license_type: "Тип лицензии", duration: "Срок",
+        devices: "Устройства", currency: "Валюта", tax: "Налоги", price: "Цена"};
+      const terms = Object.entries(labels).filter(([key]) => item.attributes?.[key]).map(([key, label]) =>
+        label + " · " + item.attributes[key]);
+      if (terms.length) row.append(element("p", terms.join(" / ")));
+      if (item.quality === "snippet") row.append(element("p", "Поисковый фрагмент. Условия требуют проверки страницы."));
       try {
         const url = new URL(item.locator);
         if (["https:", "http:"].includes(url.protocol)) {
-          const link = element("a", "Открыть первоисточник");
+          const link = element("a", "Открыть страницу");
           link.href = url.href;
           link.target = "_blank";
           link.rel = "noopener noreferrer";
@@ -262,6 +268,9 @@
     Object.assign(target, {type: "number", min: "0.01", step: "any", required: true, value: draft.plan.target ?? ""});
     label.append(target);
     box.append(cite(view, draft.evidence_ids), element("p", "Критерий · " + draft.criteria.join(" / ")),
+      element("p", "Ожидаемое наблюдение · " + draft.expected),
+      element("p", "Альтернативы · " + draft.alternatives.join(" / ")),
+      element("p", "Нужны данные · " + draft.priority.dependencies.join(" / ")),
       element("p", "База · " + (draft.plan.baseline_period?.join(" — ") || "нет периода")),
       element("p", "Контроль · " + (draft.plan.guardrails.join(" / ") || "нет контрольного ряда")),
       element("p", draft.priority.reason), element("p", draft.tag), label, submit, status);

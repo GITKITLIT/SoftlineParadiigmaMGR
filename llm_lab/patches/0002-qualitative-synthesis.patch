@@ -1,0 +1,15 @@
+--- a/pm/qwen.py
++++ b/pm/qwen.py
+@@ -154,7 +154,11 @@
+                                    "evidence_ids", "contradictions", "missing") if key in row}
+         for row in facts if set(row["evidence_ids"]) <= by_id.keys()
+     ][:5]
+-    data = json.dumps({"question": query, "evidence": batch, "server_observations": checked_facts}, ensure_ascii=False)
++    payload = {"question": query, "evidence": batch, "server_observations": checked_facts}
++    if os.getenv("PM_QWEN_QUALITATIVE", "").lower() == "true":
++        from llm_lab.synthesis import qualitative_input
++        payload = qualitative_input(query, batch, checked_facts)
++    data = json.dumps(payload, ensure_ascii=False)
+     deadline = time.monotonic() + 80
+     for attempt in range(2):
+         messages = [{"role": "system", "content": prompt},

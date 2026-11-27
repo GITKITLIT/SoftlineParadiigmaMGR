@@ -1,0 +1,148 @@
+--- a/pm/analytics.py
++++ b/pm/analytics.py
+@@ -119,10 +119,11 @@
+                 )
+             )
+         reach = {}
++        metric_rows = list(records(book["Метрики_данные"]))
+         for device in ("desktop", "mobile"):
+             seen = set()
+             num = den = 0
+-            for r in records(book["Метрики_данные"]):
++            for r in metric_rows:
+                 if (r["metric_id"], r["product"], r["segment"]) != (
+                     "cfg_reach_rate",
+                     case["reach_product"],
+@@ -155,6 +156,15 @@
+             backlog=dict(id=case["backlog_id"], title=task["title"], status=task["status"]),
+         )
+         if for_analysis:
++            basket = {}
++            for device in ("desktop", "mobile"):
++                observed = {
++                    day(row["date"]) for row in metric_rows
++                    if (row["metric_id"], row["product"], row["segment"]) ==
++                    ("cfg_add_to_cart_rate", case["reach_product"], device)
++                    and row.get("value") is not None and rs <= day(row["date"]) <= re
++                }
++                basket[device] = {"days": len(observed), "total": (re - rs).days + 1}
+             snapshots = []
+             for key, row in releases.items():
+                 try:
+@@ -163,11 +173,14 @@
+                     continue
+                 if start <= released <= partial and key and key != case["release_id"]:
+                     snapshots.append(dict(id=str(key), date=released.isoformat(),
+-                                          title=str(row.get("title") or row.get("release_name") or "")[:180],
++                                          title=str(row.get("title") or row.get("release_name") or row.get("description") or "")[:180],
+                                           related_task=row.get("related_task_ids")))
+             snapshots.sort(key=lambda row: (abs(day(row["date"]) - launch), row["id"]))
+             snapshot.update(
+                 channel=case["channel"],
++                release_title=str(release.get("title") or release.get("release_name") or release.get("description") or "")[:240],
++                reach_label="Визиты с конфигуратором",
++                basket_coverage=basket,
+                 release_history=snapshots[:12],
+                 backlog_history=[
+                     {"id": str(key), "title": str(row.get("title") or "")[:180], "status": row.get("status")}
+--- a/pm/analysis_context.py
++++ b/pm/analysis_context.py
+@@ -388,12 +388,24 @@
+             partial = rate is None or values.get("days") != values.get("total")
+             incomplete |= partial
+             self.add(entry(
+-                f"reach:{segment}", "funnel", "Выбор опции", mode=self.mode, unit="percent",
++                f"reach:{segment}", "funnel", snapshot.get("reach_label", "Выбор опции"), mode=self.mode, unit="percent",
+                 metric="cfg_reach_rate", filter={"segment": segment},
+                 period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
+                 quality="incomplete" if partial else "observed",
+                 values=values | {"rate": rate}, source_group="store_funnel",
+             ))
++        for segment, coverage in snapshot.get("basket_coverage", {}).items():
++            incomplete |= coverage["days"] != coverage["total"]
++            self.add(entry(
++                f"basket:{segment}", "funnel", "Добавление в корзину", mode=self.mode, unit="percent",
++                metric="cfg_add_to_cart_rate", filter={"segment": segment},
++                period={"start": cfg["reach_start"], "end": cfg["reach_end"]},
++                values={**coverage, "rate": None}, quality="incomplete", source_group="store_funnel",
++                text=(f"{segment}: в окне нет наблюдений события для продукта." if not coverage["days"]
++                      else f"{segment}: доступно покрытие события, конверсия по этому окну не рассчитана."),
++            ))
++            if not coverage["days"]:
++                self.limits.append("Конверсия в корзину для выбранного продукта и устройства не измерена в выгрузке.")
+         return ("missing", "no_segments") if not reach else ("partial", "incomplete_coverage") if incomplete else ("ok", None)
+
+     def releases(self):
+@@ -402,7 +414,7 @@
+         launch = snapshot.get("launch")
+         if launch:
+             self.add(entry("release:current", "release", current or "Релиз",
+-                           mode=self.mode, observed_at=launch, source_group="release_log",
++                           snapshot.get("release_title", ""), mode=self.mode, observed_at=launch, source_group="release_log",
+                            values={"related_task": snapshot.get("release_task")}))
+         cfg = snapshot["config"]
+         begin, end = day(cfg["before_start"]), day(cfg["after_end"])
+@@ -442,6 +454,18 @@
+                                mode=self.mode, values={"status": row.get("status")}, source_group="backlog"))
+             if len(self.matches) >= 4:
+                 break
++        from .ai_store import task_list
++        for task in task_list():
++            if len(self.matches) >= 8:
++                break
++            if task["data_mode"] != self.mode or task["decision"] != "accept":
++                continue
++            if not terms & tokens(task["title"] + " " + task.get("verification", "")):
++                continue
++            item = {"id": task["id"], "title": task["title"], "status": "Согласована"}
++            self.matches.append(item)
++            self.add(entry(f"backlog:approved:{len(self.matches)}", "backlog", item["id"], item["title"],
++                           mode=self.mode, values={"status": item["status"]}, source_group="backlog"))
+         return ("ok", None) if self.matches else ("missing", "no_matching_task")
+
+     def research(self, competitors):
+--- a/pm/investigation.py
++++ b/pm/investigation.py
+@@ -37,6 +37,15 @@
+     statuses, limits, matches = context.statuses, context.limits, context.matches
+     gathered = time.perf_counter() - started
+     findings = correlate(evidence)
++    missing_cart = [item["id"] for item in evidence
++                    if item.get("metric") == "cfg_add_to_cart_rate" and item["values"]["days"] == 0]
++    if missing_cart:
++        findings.append(dict(
++            relation="cart_measurement_gap", statement_type="fact", confidence="high",
++            text="В выбранном окне отсутствуют наблюдения добавления в корзину для продукта и устройства.",
++            evidence_ids=missing_cart, contradictions=[], missing=["Фактическое прохождение шага покупки"],
++            checks=["Проверить появление выбранной позиции в корзине и отдельно сверить запись события аналитики."],
++        ))
+     comparison = next((item for item in evidence if item["id"] == "memory:comparison"), None)
+     if comparison:
+         related = [item["id"] for item in evidence if item["kind"] == "historical_metric"]
+@@ -57,7 +66,7 @@
+         if item["kind"] == "funnel" and item["values"]["rate"] is not None:
+             values = item["values"]
+             findings.append(dict(
+-                text=f'{item["filter"]["segment"]} · выбор опции {values["rate"]:.1f}%, покрытие {values["days"]}/{values["total"]} дней',
++                text=f'{item["filter"]["segment"]} · {item["ref"]}: {values["rate"]:.1f}%, покрытие {values["days"]}/{values["total"]} дней',
+                 evidence_ids=[item["id"]], contradictions=[],
+                 missing=["Есть непокрытые дни"] if item["quality"] == "incomplete" else [],
+                 confidence="low" if item["quality"] == "incomplete" else "medium",
+@@ -162,10 +171,16 @@
+         hypotheses, matches, evidence, core, effect_plan, backlog_status=statuses["backlog"]["status"],
+     )]
+     elapsed = time.perf_counter() - started
++    measurement_check = next((row["checks"] for row in findings
++                              if row.get("relation") == "cart_measurement_gap"), [])
++    measurement_check = measurement_check if any(
++        item["kind"] == "orders" and (item["values"]["delta"] or 0) < 0 for item in evidence
++    ) else []
+     report = dict(
+         run_id=uuid4().hex, llm_status=status, data_mode=mode, sources_status=statuses,
+         evidence=evidence, summary=summary, findings=findings, hypotheses=hypotheses,
+-        recommended_actions=[h["verify"] for h in hypotheses] or ["Проверить полноту входных данных."],
++        recommended_actions=measurement_check + [h["verify"] for h in hypotheses]
++        or ["Проверить полноту входных данных."],
+         backlog_matches=matches, proposed_tasks=proposals, effect_plan=effect_plan, limitations=limits,
+         trace=[dict(step="collect", seconds=round(gathered, 3)),
+                *trace,

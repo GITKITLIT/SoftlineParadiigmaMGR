@@ -28,6 +28,10 @@ def report_view(report, *, focus=None):
     if focus:
         selected = [item for item in selected if item["kind"] in focus]
     measurements = [measurement(item) for item in selected]
+    if focus and "historical_comparison" in focus:
+        index = next((i for i, item in enumerate(selected) if item["kind"] == "historical_comparison"), None)
+        if index is not None:
+            measurements.insert(0, measurements.pop(index))
     observations = [item for item in evidence if item["kind"] in {
         "research", "interview", "competitor_local", "competitor_web", "backlog", "release",
         "historical_document", "historical_competitor", "memory_context",
@@ -40,7 +44,10 @@ def report_view(report, *, focus=None):
         conclusion = f"Доступные наблюдения по вопросу: {len(observations)}."
     else:
         conclusion = "По выбранным источникам данных для ответа недостаточно."
-    if not focus and hypotheses and report["llm_status"] == "ok":
+    measurement_gap = any(row.get("relation") == "cart_measurement_gap" for row in report["findings"])
+    if not focus and measurement_gap:
+        conclusion += " Конверсия в корзину недоступна для части выбранного среза."
+    if not focus and hypotheses and report["llm_status"] == "ok" and not measurement_gap:
         conclusion = f"{conclusion} Гипотеза: {hypotheses[0]['cause']}"
     return {
         "run_id": report["run_id"],
@@ -54,7 +61,7 @@ def report_view(report, *, focus=None):
         "sources_status": report["sources_status"],
         "findings": report["findings"],
         "hypotheses": hypotheses,
-        "next_step": report["recommended_actions"][0] if hypotheses else None,
+        "next_step": report["recommended_actions"][0] if hypotheses or measurement_gap else None,
         "effect_plan": report["effect_plan"],
         "limitations": report["limitations"],
         "trace": [event for event in report["trace"] if event["step"] not in HIDDEN_PHASES],
@@ -77,7 +84,7 @@ def measurement(item):
         )
         rate = values["rate"]
         measure = f"{values['num']}/{values['den']} ({rate:.1f}%)" if rate is not None else "доля неизвестна"
-        text = f"Выбор опции, {segment}: {measure}, покрытие {values['days']}/{values['total']} дней."
+        text = f"{item['ref']}, {segment}: {measure}, покрытие {values['days']}/{values['total']} дней."
     elif kind == "historical_metric":
         window = " — ".join(item["period"])
         value = values["value"]
