@@ -443,6 +443,30 @@ $("#search").onsubmit = async (e) => {
     flash(err.message);
   }
 };
+let pendingMemoryScope = null;
+
+async function runWithProgress(input) {
+  const job = await api("analysis/start", input);
+  const deadline = Date.now() + 210000;
+  const names = {sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
+    research: "Исследования", competitors: "Конкуренты", metrika: "Метрика",
+    public_competitors: "Публичные источники", effect: "Эффект", compare_history: "Сравнение периодов",
+    search_history: "Поиск в памяти", competitor_history: "История конкурентов"};
+  const statuses = {running: "выполняется", ok: "готово", missing: "нет данных", error: "ошибка",
+    unavailable: "недоступно", partial: "частично", disabled: "выключено"};
+  while (Date.now() < deadline) {
+    const result = await api("analysis/status", {job_id: job.job_id});
+    const events = result.phases.filter((event) => event.step === "tool" || event.step === "synthesis");
+    $("#runPhases").replaceChildren(...events.map((event) =>
+      node("li", (event.step === "synthesis" ? "Синтез гипотез" : names[event.tool] || event.tool) +
+      " · " + (statuses[event.status] || event.status))));
+    if (result.status === "ready") return api("analysis/report", {run_id: result.run_id});
+    if (result.status === "failed") throw Error("Расследование завершилось с ошибкой. Проверьте настройки и источники.");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+  }
+  throw Error("Время ожидания истекло. Проверьте журнал для завершённого отчёта.");
+}
+
 $("#infer").onclick = async (e) => {
   e.target.disabled = true;
   const ai = $("#ai");
@@ -461,7 +485,12 @@ $("#infer").onclick = async (e) => {
       request.web = { product: $("#publicProduct").value,
         domains: selected("#publicDomains"), topics: selected("#publicTopics") };
     }
-    const res = await api("analyze", request);
+    if (pendingMemoryScope) {
+      request.memory = pendingMemoryScope;
+      pendingMemoryScope = null;
+    }
+    $("#runPhases").replaceChildren();
+    const res = await runWithProgress(request);
     renderInvestigation(res);
     showHits(res.hits);
     proposal = res.hypothesis || res.proposal || "";
@@ -646,13 +675,17 @@ function proposalForm(report, item) {
   stop.min = "0";
   stop.step = ".01";
   stopLabel.append(stop);
+  const reasonLabel = node("label", "Причина решения");
+  const reason = document.createElement("input");
+  reason.maxLength = 800;
+  reasonLabel.append(reason);
   const accept = node("button", "Согласовать");
   accept.disabled = baseline == null;
   const reject = node("button", "Отклонить");
   reject.type = "button";
   const output = node("p", "");
   output.setAttribute("role", "status");
-  form.append(label, controlLabel, stopLabel, accept, reject, output);
+  form.append(label, controlLabel, stopLabel, reasonLabel, accept, reject, output);
   const submit = async (action) => {
     if (action === "accept" && (!target.value || !target.checkValidity() || !control.checkValidity() || !stop.checkValidity())) {
       output.textContent = "Укажите корректную численную цель.";
@@ -665,6 +698,7 @@ function proposalForm(report, item) {
         target: action === "accept" ? Number(target.value) : null,
         control_min: action === "accept" && control.value ? Number(control.value) : null,
         stop_if_below: action === "accept" && stop.value ? Number(stop.value) : null,
+        reason: reason.value.trim() || null,
         idempotency_key: report.run_id + "/" + item.id + "/" + action,
       });
       output.textContent = action === "accept" ? "Задача согласована в локальном бэклоге." : "Предложение отклонено.";
@@ -994,3 +1028,142 @@ if (example) {
 render();
 renderSaved();
 showHits(boot.evidence);
+
+
+const memoryMode = () => $("#memoryMode").value;
+async function refreshMemory() {
+  const mode = memoryMode();
+  try {
+    const [overview, listing] = await Promise.all([
+      api("memory/overview", {mode}), api("memory/series", {mode}),
+    ]);
+    if (mode !== memoryMode()) return;
+    const range = overview.first_day ? overview.first_day + " — " + overview.last_day : "период не накоплен";
+    text("#memoryStatus", "Источников " + overview.sources + " · наблюдений " + overview.observations +
+         " · документов " + overview.documents + " · " + range);
+    const lines = [];
+    if (overview.jobs[0]) lines.push("Последняя синхронизация · " +
+      (overview.jobs[0].finished || overview.jobs[0].started) + " · " + overview.jobs[0].status);
+    if (overview.backup.status !== "unknown") {
+      lines.push("Резервная копия · " + (overview.backup.last_backup || "нет подтверждения") +
+        " · проверка целостности " + (overview.backup.last_integrity_check || "нет записи") +
+        " · восстановление " + (overview.backup.last_restore_check || "нет записи"));
+    } else lines.push("Статус резервного копирования недоступен.");
+    $("#memorySources").replaceChildren(...lines.map((line) => node("p", line)));
+    const select = $("#memoryCompare").elements.series;
+    select.replaceChildren();
+    for (const item of listing.series.filter((row) => row.aggregation !== "snapshot")) {
+      const option = node("option", [item.product, item.metric, item.unit, item.segment].join(" · "));
+      option.value = item.id;
+      select.append(option);
+    }
+  } catch (error) {
+    text("#memoryStatus", error.message);
+  }
+}
+$("#memoryRefresh").onclick = refreshMemory;
+$("#memoryMode").onchange = () => {
+  $("#memoryHits").replaceChildren();
+  $("#memoryResult").replaceChildren();
+  refreshMemory();
+};
+$("#memoryCollect").onclick = async () => {
+  $("#memoryCollect").disabled = true;
+  try {
+    const result = await api("memory/sync", {kind: "sales"});
+    await refreshMemory();
+    if (result.status === "error") text("#memoryStatus", "Продажи не синхронизированы. Проверьте путь к источнику.");
+  } catch (error) { text("#memoryStatus", error.message); }
+  finally { $("#memoryCollect").disabled = false; }
+};
+$("#memorySearch").onsubmit = async (event) => {
+  event.preventDefault();
+  const container = $("#memoryHits");
+  try {
+    const result = await api("memory/search", {...values(event.currentTarget), mode: memoryMode()});
+    showMemoryResults(container, result);
+  } catch (error) {
+    container.replaceChildren(node("p", error.message));
+  }
+};
+
+$("#memorySaveNote").onclick = async () => {
+  const input = values($("#memorySearch"));
+  if (memoryMode() !== "local") {
+    text("#memoryHits", "Заметки оператора сохраняются только в рабочем режиме.");
+    return;
+  }
+  try {
+    const result = await api("memory/note", {text: input.query, product: input.product, observed: input.start});
+    text("#memoryHits", "Сохранено как неподтверждённая заметка · " + result.category);
+  } catch (error) { text("#memoryHits", error.message); }
+};
+
+function showMemoryResults(container, result) {
+  container.replaceChildren();
+  for (const item of result.documents) {
+    container.append(node("p", item.reference + " · версия " + item.revision + " · " + item.content));
+  }
+  for (const item of result.decisions) {
+    const record = node("p", [item.created.slice(0, 10), item.question, item.decision,
+      item.decision_reason, item.effect].filter(Boolean).join(" · "));
+    const open = node("button", "Открыть расследование");
+    open.onclick = async () => {
+      try {
+        renderInvestigation(await api("analysis/report", {run_id: item.run_id}));
+        $("#agent").scrollIntoView();
+      } catch (error) { flash(error.message); }
+    };
+    record.append(open);
+    container.append(record);
+  }
+  if (!container.children.length) container.append(node("p", "Подходящих записей нет."));
+}
+
+function memoryComparison() {
+  const input = values($("#memoryCompare"));
+  return {mode: memoryMode(), series_id: Number(input.series),
+    before: [input.beforeStart, input.beforeEnd], after: [input.afterStart, input.afterEnd]};
+}
+$("#memoryCompare").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const result = await api("memory/compare", memoryComparison());
+    const line = result.status === "ok"
+      ? fmt(result.before.value) + " → " + fmt(result.after.value) + " · изменение " + fmt(result.delta)
+      : "Окна несопоставимы или неполны · " + result.before.status + " / " + result.after.status;
+    $("#memoryResult").replaceChildren(node("p", line), ...result.warnings.map((warning) => node("p", warning)));
+  } catch (error) { text("#memoryResult", error.message); }
+};
+$("#memoryAsk").onclick = () => {
+  const form = $("#memoryCompare");
+  if (!form.reportValidity()) return;
+  const options = memoryComparison();
+  pendingMemoryScope = {mode: options.mode, compare: options};
+  $("#search").elements.query.value = "Сравни выбранные исторические периоды";
+  $("#agent").scrollIntoView();
+  $("#infer").click();
+};
+$("#memoryCompetitors").onclick = async () => {
+  try {
+    const input = memoryComparison();
+    const result = await api("memory/competitors", {mode: input.mode, period: input.after});
+    $("#memoryResult").replaceChildren(...(result.length ? result.map((row) =>
+      node("p", [row.observed, row.competitor, row.before + " → " + row.after + " " + row.currency,
+        row.terms, row.reference].filter(Boolean).join(" · "))) :
+      [node("p", "Сопоставимых изменений цен в этом окне нет.")]));
+  } catch (error) { text("#memoryResult", error.message); }
+};
+
+
+$("#memoryTimeline").onclick = async () => {
+  try {
+    const input = memoryComparison();
+    const result = await api("memory/timeline", {mode: input.mode, series_id: input.series_id, period: input.after});
+    const rows = result.observations.slice(-12).map((item) => node("p",
+      [item.start + " — " + item.end, item.number == null ? "значение отсутствует" : fmt(item.number),
+        result.series.unit, item.quality, "версия " + item.version,
+        item.reference || result.series.source, "получено " + item.retrieved].join(" · ")));
+    $("#memoryResult").replaceChildren(...(rows.length ? rows : [node("p", "Наблюдений за окно нет.")]));
+  } catch (error) { text("#memoryResult", error.message); }
+};

@@ -1,6 +1,8 @@
 """Private SQLite storage for investigations, approvals and effect reviews."""
 import json
+import os
 import re
+from pathlib import Path
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -18,6 +20,26 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def require_migration_snapshot(path, version):
+    marker = os.getenv("PM_MIGRATION_STATUS_FILE")
+    if not marker or version == 0 or version >= 5:
+        return
+    file = Path(marker).resolve()
+    try:
+        if file.is_relative_to(path.parent) or file.stat().st_size > 4000:
+            raise ValueError
+        record = json.loads(file.read_text(encoding="utf8"))
+        fingerprint = path.stat()
+        if (record["status"] == "ok" and record["source_quiescent"] is True
+                and record["source_schema"] == version
+                and record["source_mtime_ns"] == fingerprint.st_mtime_ns
+                and record["source_size"] == fingerprint.st_size):
+            return
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    raise ValueError("Миграция требует проверенной независимой копии остановленной базы")
+
+
 @contextmanager
 def database():
     path = private_dir() / "ai.sqlite3"
@@ -26,10 +48,18 @@ def database():
     db.row_factory = sqlite3.Row
     try:
         db.execute("PRAGMA foreign_keys=ON")
+        limit = os.getenv("PM_DB_MAX_MIB", "")
+        if limit:
+            mib = int(limit)
+            if not 64 <= mib <= 65536:
+                raise ValueError("Размер базы должен быть от 64 до 65536 МиБ")
+            page_size = db.execute("PRAGMA page_size").fetchone()[0]
+            db.execute(f"PRAGMA max_page_count={mib * 1048576 // page_size}")
         db.execute("BEGIN IMMEDIATE")
         version = db.execute("PRAGMA user_version").fetchone()[0]
         if version not in (0, 1, 2, 3, 4, 5):
             raise ValueError("Версия хранилища неизвестна")
+        require_migration_snapshot(path, version)
         if version == 0:
             db.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created TEXT NOT NULL, report TEXT NOT NULL)")
             db.execute("""CREATE TABLE IF NOT EXISTS tasks (

@@ -1,5 +1,5 @@
 <!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
-<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#settingsPanel">Настройки</a></nav></header>
+<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#productMemory">База знаний</a><a href="#settingsPanel">Настройки</a></nav></header>
 <main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p>
 <section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
 <section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
@@ -19,6 +19,7 @@
 </details>
 <button type="button" class="secondary" id="openInvestigation">Открыть расследование</button>
 <p id="runSummary" role="status"></p>
+<ol id="runPhases" aria-label="Этапы расследования"></ol>
 <details id="settingsPanel"><summary>Настройки и диагностика</summary>
 <p id="analysisDiagnostics">Подключите локальный сервер.</p>
 <button type="button" class="secondary" id="checkNow">Проверить порог</button>
@@ -34,6 +35,27 @@
 <div id="runHistory"></div><div id="serverTasks"></div></details>
 </div><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
 <details><summary>Загрузить материал в локальный поиск</summary><form id="upload"><label>Источник<input name="name" maxlength="120" placeholder="Название интервью или исследования" required></label><label>Категория<select name="kind"><option>Интервью</option><option>Конкуренты</option></select></label><label>Текстовый файл UTF-8<input type="file" id="txt" accept=".txt,text/plain"></label><label>Выбранные абзацы<textarea name="text" required maxlength="30000"></textarea></label><button>Добавить в поиск</button></form></details><div id="t08" class="note"></div></section>
+<section class="panel" id="productMemory">
+<h2>База знаний</h2>
+<label>Режим данных<select id="memoryMode"><option value="local">Рабочие</option><option value="synthetic">Синтетические</option><option value="demo_counter">Тестовый счётчик</option></select></label>
+<div class="actions"><button type="button" id="memoryRefresh">Показать накопленные знания</button>
+<button type="button" id="memoryCollect" class="secondary">Прочитать текущие продажи</button></div>
+<p id="memoryStatus" role="status"></p><div id="memorySources"></div>
+<form id="memorySearch"><label>Поиск в исследованиях и решениях<input name="query" required maxlength="500"></label>
+<label>Продукт<input name="product"></label><div class="grid"><label>С даты<input name="start" type="date"></label>
+<label>До даты<input name="end" type="date"></label></div><button>Найти</button>
+<button id="memorySaveNote" type="button" class="secondary">Сохранить текст как заметку</button></form>
+<div id="memoryHits"></div>
+<form id="memoryCompare"><label>Исторический ряд<select name="series" required></select></label>
+<div class="grid"><label>Первое окно с<input name="beforeStart" type="date" required></label>
+<label>Первое окно до<input name="beforeEnd" type="date" required></label>
+<label>Второе окно с<input name="afterStart" type="date" required></label>
+<label>Второе окно до<input name="afterEnd" type="date" required></label></div>
+<button>Сравнить периоды</button><button type="button" id="memoryAsk" class="secondary">Исследовать с агентом</button>
+<button type="button" id="memoryCompetitors" class="secondary">Изменения цен за второе окно</button>
+<button type="button" id="memoryTimeline" class="secondary">История выбранного ряда</button></form>
+<div id="memoryResult" aria-live="polite"></div>
+</section>
 <section id="backlog" class="panel"><h2>Демо-бэклог</h2><p>Задачи сохраняются в этом браузере. Трекер Redmine подключается отдельно.</p><div id="saved"></div><button class="draft" id="draftBtn">Создать задачу проверки</button>
 <form id="task" hidden><h3>Гипотеза до следующей доработки</h3><label>Название<input name="title" required maxlength="200"></label><label>Гипотеза<textarea name="hypothesis" required></textarea></label><label>Способ проверки<textarea name="steps" required rows="4"></textarea></label><label>Численная цель четырёхнедельного индекса<input type="number" name="target" required min="0.01" step=".01"></label><p id="criterion"></p><p>Тег · сгенерирована ИИ-помощником</p><div class="actions"><button>Сохранить задачу</button><button id="cancel" type="button" class="secondary">Отменить</button></div></form></section>
 <section id="effect" class="panel"><h2>Результат после исправления</h2><p>Зафиксируйте цель до проверки. Для оценки нужны четыре последовательные полные недели после исправления и динамика второй группы за те же даты.</p><label>Данные для оценки<select id="mode"><option value="actual">Данные после исправления</option><option value="demo">Синтетический тест</option></select></label><p id="effectResult" aria-live="polite">Ожидаем данные после исправления</p>

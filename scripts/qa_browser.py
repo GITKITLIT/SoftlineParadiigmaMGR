@@ -128,6 +128,16 @@ with TemporaryDirectory() as d:
             expect(t.locator("#serverTasks")).to_contain_text("согласована")
             t.locator("#dailyDigest").click()
             expect(t.locator("#digestStatus")).to_contain_text("Синтетические · расследований 1")
+            t.locator("#memoryMode").select_option("synthetic")
+            expect(t.locator("#memoryStatus")).to_contain_text("Источников")
+            expect(t.locator("#memoryCompare select option").first).to_contain_text("orders_index")
+            for field, value in {
+                "beforeStart": "2025-02-03", "beforeEnd": "2025-02-09",
+                "afterStart": "2025-03-10", "afterEnd": "2025-03-16",
+            }.items():
+                t.locator(f"#memoryCompare input[name={field}]").fill(value)
+            t.get_by_role("button", name="Сравнить периоды", exact=True).click()
+            expect(t.locator("#memoryResult")).to_contain_text("изменение")
             t.locator("#serverTasks input").first.set_input_files({
                 "name": "simulation.json", "mimeType": "application/json",
                 "buffer": (root / "data/effect-demo.json").read_bytes(),

@@ -1,5 +1,4 @@
 """Bounded deterministic ingestion and periodic collection."""
-import hashlib
 import os
 import sqlite3
 import threading
@@ -139,7 +138,8 @@ def sync(kind, day_key, *, manual=False):
         selected = date.fromisoformat(memory.iso(day_key))
         if not 1 <= (date.today() - selected).days <= 1096:
             raise ValueError("Запрашивайте завершённый день в пределах 1096 дней")
-        identity = hashlib.sha256(os.getenv("METRIKA_COUNTER_ID", "").encode()).hexdigest()[:20]
+        identity = memory.digest([os.getenv("METRIKA_COUNTER_ID"), os.getenv("METRIKA_SCOPE"),
+                                  os.getenv("METRIKA_GOALS"), os.getenv("METRIKA_EXTRA_METRICS")])[:20]
         key = f"{day_key}:{identity}"
         if not os.getenv("METRIKA_TOKEN") or not os.getenv("METRIKA_COUNTER_ID"):
             return {"status": "disabled"}
@@ -157,6 +157,9 @@ def sync(kind, day_key, *, manual=False):
             detail = f"created:{result['created']}"
         else:
             result = metrika(day_key, day_key, detailed=True)
+            if result.get("memory_status") == "write_failed":
+                settle(job, "error", "storage_write_failed")
+                return {"status": "error"}
             if result["status"] not in {"ok", "partial"}:
                 settle(job, "error", result.get("reason", "source_unavailable"))
                 return {"status": "error"}

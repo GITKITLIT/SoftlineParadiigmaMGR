@@ -155,7 +155,7 @@ def observation(db, row, *, recorded=None):
     if end < start:
         raise ValueError("Конец наблюдения предшествует началу")
     number = row.get("value")
-    if number is not None and (type(number) not in (int, float) or not math.isfinite(number)):
+    if number is not None and (type(number) not in (int, float) or not -1e150 <= number <= 1e150 or not math.isfinite(number)):
         raise ValueError("Показатель должен быть числом или null")
     if number is None and quality == "complete" and aggregation != "snapshot":
         quality = "missing"
@@ -249,7 +249,8 @@ def record_web(db, item):
         "retrieved": now, "reference": url,
         "dimensions": {"topic": item.get("topic"), "terms": offer.get("terms"), "page": digest(url)},
         "metadata": {"evidence_id": item["id"], "title": item.get("ref"), "excerpt": item.get("text"),
-                     "publication_date": published, "content_type": item.get("quality")},
+                     "publication_date": published, "content_type": item.get("quality"),
+                     "attributes": item.get("attributes", {})},
     })
 
 

@@ -20,6 +20,7 @@ REQUESTED = {
     "compare_history": ("год назад", "квартал", "сравни период", "прошлый год"),
     "search_history": ("ранее", "истори", "прошл", "отверг", "решен", "повторя"),
     "competitor_history": ("цен", "конкурент"),
+    "product_history": ("релиз", "развивал", "развитие"),
 }
 
 
@@ -44,14 +45,18 @@ def valid_action(action, available):
     return purpose in FINISH_PURPOSES if tool == "finish" else tool in available and purpose in TOOL_PURPOSES
 
 
-def investigate(context, decide=None, *, clock=time.monotonic):
+def investigate(context, decide=None, *, clock=time.monotonic, progress=None):
     trace, usage = [], {}
     end = clock() + PLAN_SECONDS
     termination = "offline_collection" if decide is None else "step_limit"
 
     def execute(name, arguments, purpose, actor):
         started = clock()
+        if progress:
+            progress({"step": "tool", "tool": name, "actor": actor, "status": "running"})
         result = context.run(name, arguments)
+        if progress:
+            progress({"step": "tool", "tool": name, "actor": actor, "status": result["status"]})
         trace.append(dict(step="tool", tool=name, arguments=arguments, purpose=purpose, actor=actor,
                           seconds=round(clock() - started, 3), **result))
 
@@ -66,6 +71,8 @@ def investigate(context, decide=None, *, clock=time.monotonic):
                 termination = "sources_exhausted"
                 break
             started = clock()
+            if progress:
+                progress({"step": "decision", "actor": "qwen", "status": "running"})
             action, spent = decide(context.query, remaining, list(context.evidence.values()), trace, end)
             for key, count in spent.items():
                 usage[key] = usage.get(key, 0) + count

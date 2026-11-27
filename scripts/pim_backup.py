@@ -67,9 +67,11 @@ def write_status(path, fields):
 
 def create(database, directory, documents=(), status=None):
     source, directory = external(database), external(directory)
-    if not source.is_file() or directory == source.parent or directory.is_relative_to(source.parent):
+    if (not source.is_file() or directory.is_relative_to(source.parent)
+            or source.parent.is_relative_to(directory)):
         raise ValueError("Для копии нужен отдельный каталог вне состояния приложения")
     started = utc()
+    source_before = source.stat()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = directory / ("pim-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:12])
     target.mkdir(mode=0o700)
@@ -86,7 +88,7 @@ def create(database, directory, documents=(), status=None):
     for document in documents:
         document = external(document)
         if (not document.is_file() or document.suffix.casefold() not in DOCUMENT_MIME
-                or document.stat().st_size > 100_000_000 or document.name in {DB_NAME, "manifest.json"}):
+                or document.stat().st_size > 100_000_000 or document.name.casefold() in {DB_NAME, "manifest.json"}):
             raise ValueError("Недопустимый файл приложения к копии")
         if document.name in files:
             raise ValueError("Повторяется имя приложения")
@@ -98,7 +100,12 @@ def create(database, directory, documents=(), status=None):
         json.dump(manifest, output, indent=2)
         output.flush()
         os.fsync(output.fileno())
-    write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"]})
+    source_after = source.stat()
+    write_status(status, {"status": "ok", "last_backup": started, "last_integrity_check": manifest["verified"],
+                          "source_schema": version, "source_mtime_ns": source_after.st_mtime_ns,
+                          "source_size": source_after.st_size,
+                          "source_quiescent": (source_before.st_mtime_ns, source_before.st_size) ==
+                                              (source_after.st_mtime_ns, source_after.st_size)})
     return target, manifest
 
 
@@ -140,6 +147,39 @@ def restore(directory, destination, status=None):
     return {"status": "ok", "restore_seconds": round(elapsed, 3), "snapshot_at": manifest["created"]}
 
 
+
+def retention_plan(directory, now=None):
+    from datetime import timedelta
+    now = now or datetime.now(timezone.utc)
+    root = external(directory)
+    marked, snapshots = {}, []
+    for folder in root.glob("pim-????????T??????Z-*"):
+        if not folder.is_dir() or folder.is_symlink() or not (folder / "manifest.json").is_file():
+            continue
+        date_code = folder.name.split("-")[1]
+        try:
+            instant = datetime.strptime(date_code, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        snapshots.append((instant, folder.name))
+    for instant, name in sorted(snapshots, reverse=True):
+        age = now - instant
+        if age < timedelta(0):
+            marked["future:" + name] = name
+            continue
+        for label, days, key in [
+            ("hour", 2, instant.strftime("%Y-%m-%dT%H")),
+            ("day", 30, instant.strftime("%Y-%m-%d")),
+            ("week", 84, instant.strftime("%G-%V")),
+            ("month", 366, instant.strftime("%Y-%m")),
+        ]:
+            if age < timedelta(days=days):
+                marked.setdefault(label + key, name)
+    if snapshots:
+        marked["newest"] = max(snapshots)[1]
+    kept = set(marked.values())
+    return {"keep": sorted(kept), "review_for_expiry": sorted(name for _, name in snapshots if name not in kept)}
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -155,6 +195,8 @@ def main():
     restore_args.add_argument("--snapshot", required=True)
     restore_args.add_argument("--output", required=True)
     restore_args.add_argument("--status-file")
+    retention_args = actions.add_parser("retention-plan")
+    retention_args.add_argument("--directory", required=True)
     args = parser.parse_args()
     try:
         if args.action == "create":
@@ -162,8 +204,10 @@ def main():
             result = {"snapshot": path.name, "created": result["created"], "status": "ok"}
         elif args.action == "verify":
             result = {"status": "ok", "schema": verify(args.snapshot)["sqlite_version"]}
-        else:
+        elif args.action == "restore-test":
             result = restore(args.snapshot, args.output, args.status_file)
+        else:
+            result = retention_plan(args.directory)
         print(json.dumps(result))
         return 0
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as error:

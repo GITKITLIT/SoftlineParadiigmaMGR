@@ -56,6 +56,14 @@ def metrika(start, end, opener=None, *, detailed=False, segment=None):
         for name, goal in list(configuration("METRIKA_GOALS").items())[:5]:
             if type(goal) is int and goal > 0 and name.isidentifier() and len(name) <= 40:
                 metrics["goal_" + name] = (f"ym:s:goal{goal}reaches", "completions")
+        for name, spec in list(configuration("METRIKA_EXTRA_METRICS").items())[:6]:
+            if (name not in metrics and name.isidentifier() and len(name) <= 40
+                    and isinstance(spec, dict) and isinstance(spec.get("code"), str)
+                    and 0 < len(spec["code"]) < 120 and spec["code"].startswith(("ym:s:", "ym:pv:"))
+                    and all(c.isascii() and (c.isalnum() or c in ":_") for c in spec["code"])
+                    and spec.get("unit") in {"orders", "visits", "users", "views", "completions",
+                                              "seconds", "percent", "currency", "ratio"}):
+                metrics[name] = spec["code"], spec["unit"]
     query = dict(ids=counter, metrics=",".join(v[0] for v in metrics.values()),
                  date1=start, date2=end, accuracy="full")
     if segment:
@@ -86,7 +94,8 @@ def metrika(start, end, opener=None, *, detailed=False, segment=None):
                                  source="Яндекс.Метрика · настроенный счётчик", metric="ym:s:visits",
                                  start=start, end=end, value=values["visits"]["value"],
                                  sampled=data.get("sampled") is True, metrics=values, cached=False,
-                                 missing=["ecommerce"] + ([] if len(metrics) > len(METRICS) else ["goal"]),
+                                 missing=([] if any(unit == "orders" for _, unit in metrics.values()) else ["ecommerce"]) +
+                                 ([] if any(name.startswith("goal_") for name in metrics) else ["goal"]),
                                  retrieved=datetime.now(timezone.utc).isoformat())
             if not result["available"]:
                 result["message"] = "Метрика не вернула число визитов."

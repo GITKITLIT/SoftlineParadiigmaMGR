@@ -76,11 +76,12 @@ def api(route, b):
             previous = (date.today() - timedelta(days=1)).isoformat()
             return collection.sync(b.get("kind", "sales"), b.get("day", previous), manual=True)
         if action == "overview":
-            return history.overview(b.get("mode", "local"))
+            return history.overview(b.get("mode", "local")) | {"backup": history.backup_status()}
         if action == "series":
             return {"series": history.series_index(b.get("mode", "local"), product=b.get("product"))}
         readers = {"compare": history.compare, "timeline": history.timeline,
-                   "search": history.search, "competitors": history.competitor_changes}
+                   "search": history.search, "competitors": history.competitor_changes,
+                   "product": history.product_history, "note": history.save_note}
         return readers[action](b)
     if route == "/api/overview":
         return recalculate(overview(), b)
@@ -90,6 +91,9 @@ def api(route, b):
         return local_doc(b)
     if route == "/api/analyze":
         return investigation.analyze(b)
+    if route in {"/api/analysis/start", "/api/analysis/status"}:
+        from pm import live_runs
+        return live_runs.start(b) if route.endswith("/start") else live_runs.status(b["job_id"])
     if route == "/api/analysis/settings":
         from pm.analysis_context import allowlist
 
@@ -232,6 +236,8 @@ def main():
         if args.workbook:
             os.environ["PM_WORKBOOK"] = args.workbook
         overview()
+        with ai_store.database():
+            pass
         print(f"ParadiigmaMGR: http://127.0.0.1:{args.port}", flush=True)
         with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as httpd:
             from pm import collection

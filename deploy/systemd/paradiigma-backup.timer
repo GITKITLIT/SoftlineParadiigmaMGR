@@ -1,0 +1,11 @@
+[Unit]
+Description=Run independent ParadiigmaMGR backups hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+Unit=paradiigma-backup.service
+
+[Install]
+WantedBy=timers.target

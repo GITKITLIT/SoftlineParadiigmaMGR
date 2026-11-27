@@ -108,7 +108,7 @@ def normalize_web(item, domains, product, topics):
                      observed_at=utc(item.get("published_at")), retrieved_at=utc(item.get("retrieved_at")),
                      topic=item["topic"], product=product, competitor=host_from_url(item["url"]),
                      freshness=freshness(item.get("published_at")),
-                     **verified_offer(item))
+                     attributes=public_attributes(item), **verified_offer(item))
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
 
@@ -117,10 +117,38 @@ def host_from_url(value):
     return urlsplit(value).hostname
 
 
-def verified_offer(item):
-    offer = item.get("offer")
-    if item.get("content_type") != "page_excerpt" or not isinstance(offer, dict):
+OFFER_TERMS = ("product", "version", "license_type", "duration", "devices", "tax", "currency")
+
+
+def public_attributes(item):
+    attrs = item.get("attributes")
+    if item.get("content_type") != "page_excerpt" or not isinstance(attrs, dict):
         return {}
+    names = (*OFFER_TERMS, "price", "availability", "purchase_flow", "license_selection",
+             "consultation", "payment", "price_valid_until")
+    return {name: clean(attrs[name], 140) for name in names
+            if isinstance(attrs.get(name), str) and attrs[name]}
+
+
+def verified_offer(item):
+    if item.get("content_type") != "page_excerpt":
+        return {}
+    offer = item.get("offer")
+    if not isinstance(offer, dict):
+        attrs = public_attributes(item)
+        conflicts = item.get("attribute_conflicts") or {}
+        if any(name in conflicts for name in (*OFFER_TERMS, "price")) or not all(attrs.get(key) for key in OFFER_TERMS):
+            return {}
+        price = attrs.get("price", "").replace(" ", "").replace(",", ".")
+        currency = attrs["currency"].casefold()
+        if not re.fullmatch(r"[0-9]{1,12}(?:[.][0-9]{1,4})?", price):
+            return {}
+        symbols = {"₽": "RUB", "руб": "RUB", "руб.": "RUB", "$": "USD", "€": "EUR"}
+        terms = " | ".join(attrs[key].casefold() for key in OFFER_TERMS if key != "currency")
+        if len(terms) > 350:
+            return {}
+        offer = {"metric": "price", "value": float(price), "currency": symbols.get(currency, currency.upper()),
+                 "terms": terms}
     value, currency, terms = (offer.get(key) for key in ("value", "currency", "terms"))
     if (offer.get("metric") == "price" and type(value) in (int, float) and 0 <= value < 1e12
             and isinstance(currency, str) and re.fullmatch(r"[A-Z]{3}", currency)
@@ -163,8 +191,9 @@ def clean(value, size):
 
 
 def entry(identifier, kind, ref, text="", *, mode, quality="observed", **extra):
-    return dict(evidence_id=identifier, id=identifier, kind=kind, ref=clean(ref, 180),
-                text=clean(text, 700), data_mode=mode, quality=quality, availability="available",
+    from .memory import redact
+    return dict(evidence_id=identifier, id=identifier, kind=kind, ref=redact(clean(ref, 180)),
+                text=redact(clean(text, 700)), data_mode=mode, quality=quality, availability="available",
                 unit=None, metric=None, filter=None, period=None, observed_at=None,
                 retrieved_at=None, locator=None) | extra
 
@@ -188,8 +217,9 @@ TOOLS = {
     "compare_history": "Сравнение двух заданных периодов в одном историческом ряду",
     "search_history": "Релевантные исторические исследования, расследования и решения",
     "competitor_history": "История сопоставимых ценовых предложений по заданному периоду",
+    "product_history": "Исторические выпуски и сравнение окон до и после выпуска",
 }
-FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect", "compare_history", "search_history", "competitor_history")
+FALLBACK = ("sales", "funnel", "releases", "backlog", "research", "competitors", "metrika", "public_competitors", "effect", "compare_history", "search_history", "competitor_history", "product_history")
 
 
 class InvestigationContext:
@@ -212,7 +242,7 @@ class InvestigationContext:
         self.completed = set()
         self.statuses = {key: {"status": "not_checked"} for key in (
             "sales", "funnel", "release", "backlog", "research", "competitor_local",
-            "metrika", "competitor_web", "effect", "historical_metrics", "memory", "historical_competitors",
+            "metrika", "competitor_web", "effect", "historical_metrics", "memory", "historical_competitors", "historical_releases",
         )}
         self.available = dict(TOOLS)
         scope = request.get("memory")
@@ -228,6 +258,14 @@ class InvestigationContext:
                                  ("competitors", "competitor_local"), ("public_competitors", "competitor_web")):
                 self.available.pop(tool)
                 self.statuses[status] = {"status": "disabled", "reason": "different_current_data_mode"}
+        if self.memory_scope.get("compare"):
+            for tool, key in (("sales", "sales"), ("funnel", "funnel"),
+                              ("releases", "release"), ("backlog", "backlog")):
+                self.available.pop(tool, None)
+                self.statuses[key] = {"status": "disabled", "reason": "historical_comparison_scope"}
+        if not self.memory_scope.get("product"):
+            self.available.pop("product_history")
+            self.statuses["historical_releases"] = {"status": "disabled", "reason": "no_product_scope"}
         if not self.memory_scope.get("compare"):
             self.available.pop("compare_history")
             self.statuses["historical_metrics"] = {"status": "disabled", "reason": "no_period_selection"}
@@ -283,6 +321,7 @@ class InvestigationContext:
             "compare_history": ("historical_metrics", self.compare_history),
             "search_history": ("memory", self.search_history),
             "competitor_history": ("historical_competitors", self.competitor_history),
+            "product_history": ("historical_releases", self.product_history),
         }
         key, handler = handlers[name]
         before = set(self.evidence)
@@ -525,8 +564,11 @@ class InvestigationContext:
         options = self.memory_scope.get("search", {})
         result = search(options | {"mode": self.mode, "query": self.query})
         for item in result["documents"][:4]:
+            import json
+            origin = json.loads(item["metadata"] or "{}").get("origin")
             self.add(entry(f"memory:document:{item['id']}", "historical_document", item["reference"],
-                           item["content"], mode=self.mode, quality="excerpt", observed_at=item["observed"],
+                           item["content"], mode=self.mode, quality="reported" if origin == "user_reported" else "excerpt",
+                           observed_at=item["observed"],
                            source_group=f"document:{item['reference'].split(' · ', 1)[0]}",
                            locator={"fragment_id": item["id"], "revision": item["revision"]}))
         for index, item in enumerate(result["decisions"][:4]):
@@ -548,3 +590,16 @@ class InvestigationContext:
                            source_group=f"public:{row['competitor']}", values={"before": row["before"], "after": row["after"]},
                            memory_observation_id=row["observation_id"]))
         return ("ok", None) if rows else ("missing", "no_comparable_price_changes")
+
+
+    def product_history(self):
+        from .history import product_history
+
+        result = product_history(self.memory_scope["product"] | {"mode": self.mode})
+        for row in result["releases"][:6]:
+            numbers = row.get("comparison") or {}
+            self.add(entry(f"memory:release:{row['observation_id']}", "historical_release", row["id"],
+                           mode=self.mode, observed_at=row["date"], quality="observed",
+                           source_group="release_log", memory_observation_id=row["observation_id"],
+                           values={"delta": numbers.get("delta"), "interpretation": "descriptive_only"}))
+        return ("ok", None) if result["releases"] else ("missing", "no_historical_releases")

@@ -100,6 +100,23 @@ def compare(request):
         series = series_for(db, mode, request["series_id"])
         earlier = summarize(rows_for(db, series["id"], *before[:2], as_of), before, series["aggregation"])
         later = summarize(rows_for(db, series["id"], *after[:2], as_of), after, series["aggregation"])
+        denominator_id = request.get("denominator_series_id")
+        if denominator_id is not None:
+            base = series_for(db, mode, denominator_id)
+            fields = ("product", "source_id", "segment", "timezone", "dimensions")
+            if (series["id"] == base["id"] or any(series[key] != base[key] for key in fields)
+                    or series["aggregation"] != "sum" or base["aggregation"] != "sum"):
+                raise ValueError("Для конверсии нужны числитель и база одного продукта, источника и сегмента")
+            for observed, period in ((earlier, before), (later, after)):
+                denominator = summarize(rows_for(db, base["id"], *period[:2], as_of), period, base["aggregation"])
+                divisor = denominator["value"]
+                if observed["status"] != "ok" or denominator["status"] != "ok" or not divisor:
+                    observed.update(status="missing_or_zero_denominator", value=None)
+                else:
+                    observed.update(numerator=observed["value"], denominator=divisor,
+                                    value=100 * observed["value"] / divisor)
+                observed["observations"] = (observed["observations"] + denominator["observations"])[:32]
+            series = series | {"unit": "percent", "denominator_series_id": denominator_id}
     warnings = []
     if mode != "synthetic":
         try:
@@ -166,7 +183,15 @@ def competitor_changes(request):
     return sorted(output, key=lambda item: item["observed"], reverse=True)[:50]
 
 
-def past_decisions(mode, query, *, start=None, end=None, limit=12):
+def primary_signatures(evidence):
+    return {item["id"]: memory.digest([
+        item.get("kind"), item.get("ref"), item.get("text"), item.get("period"), item.get("values"),
+        item.get("quality"), item.get("source_group"),
+    ]) for item in evidence if item.get("kind") not in {"memory_context", "historical_comparison"}
+        and item.get("quality") not in {"reported", "derived", "incomplete", "snippet"}}
+
+
+def past_decisions(mode, query, *, start=None, end=None, limit=12, internal=False):
     require_mode(mode)
     words = query.casefold().split()[:8]
     with ai_store.database() as db:
@@ -191,6 +216,9 @@ def past_decisions(mode, query, *, start=None, end=None, limit=12):
                             "summary": report.get("summary"), "proposal": task.get("title"),
                             "decision": row["action"], "decision_reason": task.get("decision_reason"),
                             "effect": review.get("status"), "classification": "historical_context"})
+            if internal:
+                matches[-1]["hypothesis"] = task.get("hypothesis", "")
+                matches[-1]["primary_signatures"] = list(primary_signatures(report.get("evidence", [])).values())
             if len(matches) == limit:
                 break
         return matches
@@ -204,7 +232,7 @@ def overview(mode):
                    LEFT JOIN memory_observations o ON o.series_id=s.id WHERE x.mode=?""", (mode,)).fetchone()
         jobs = db.execute("""SELECT kind,status,started,finished,detail FROM memory_sync_jobs
                              ORDER BY started DESC LIMIT 15""").fetchall()
-        documents = db.execute("SELECT count(*) FROM memory_documents").fetchone()[0]
+        documents = db.execute("SELECT count(*) FROM memory_documents").fetchone()[0] if mode == "local" else 0
     return dict(counts) | {"documents": documents, "jobs": [dict(row) for row in jobs]}
 
 
@@ -218,3 +246,84 @@ def search(request):
         documents = (memory.find_fragments(db, query, product=product, kind=request.get("kind"),
                                            start=start, end=end) if mode == "local" else [])
     return {"documents": documents, "decisions": past_decisions(mode, query, start=start, end=end)}
+
+
+def backup_status():
+    import os
+    from pathlib import Path
+
+    name = os.getenv("PM_BACKUP_STATUS_FILE")
+    if not name:
+        return {"status": "unknown"}
+    path = Path(name)
+    try:
+        if path.stat().st_size > 4000:
+            return {"status": "unknown"}
+        supplied = json.loads(path.read_text(encoding="utf8"))
+        status = supplied.get("status")
+        answer = {"status": status if status in {"ok", "error"} else "unknown"}
+        for name in ("last_backup", "last_integrity_check", "last_restore_check"):
+            if supplied.get(name):
+                answer[name] = memory.stamp(supplied[name])
+        return answer
+    except (OSError, TypeError, ValueError, AttributeError):
+        return {"status": "unknown"}
+
+
+def product_history(request):
+    mode = require_mode(request.get("mode", "local"))
+    name = memory.label(request["product"])
+    start, end, _ = window(request["period"])
+    as_of = memory.stamp(request["as_of"]) if request.get("as_of") else None
+    series_id = request.get("series_id")
+    with ai_store.database() as db:
+        targets = db.execute(f"""SELECT s.id,s.subject,s.method,s.unit,x.stream {JOIN}
+                              WHERE x.mode=? AND s.product=? AND x.stream='release' LIMIT 150""",
+                             (mode, name)).fetchall()
+        series = series_for(db, mode, series_id) if series_id is not None else None
+        if series and (series["product"] != name or series["stream"] != "sales"):
+            raise ValueError("Для эффекта релиза укажите ряд продаж этого продукта")
+        result = []
+        for target in targets:
+            for row in rows_for(db, target["id"], start, end, as_of):
+                if row["quality"] == "retracted":
+                    continue
+                observed = row["event_date"] or row["start"]
+                facts = {"id": target["subject"], "date": observed, "observation_id": row["id"],
+                         "metadata": json.loads(row["payload"])}
+                if series:
+                    release = date.fromisoformat(observed)
+                    launch_week = release - timedelta(days=release.weekday())
+                    before = ((launch_week - timedelta(days=28)).isoformat(),
+                              (launch_week - timedelta(days=1)).isoformat(), 28)
+                    after = ((launch_week + timedelta(days=7)).isoformat(),
+                             (launch_week + timedelta(days=34)).isoformat(), 28)
+                    first = summarize(rows_for(db, series_id, *before[:2], as_of), before, series["aggregation"])
+                    last = summarize(rows_for(db, series_id, *after[:2], as_of), after, series["aggregation"])
+                    facts["comparison"] = {
+                        "before": first, "after": last,
+                        "delta": last["value"] - first["value"] if first["status"] == last["status"] == "ok" else None,
+                        "interpretation": "descriptive_only",
+                    }
+                result.append(facts)
+    return {"product": name, "releases": sorted(result, key=lambda item: item["date"], reverse=True)[:25]}
+
+
+def save_note(request):
+    text = memory.label(request.get("text"), 1800)
+    if reidentification(text):
+        raise ValueError("Удалите персональные контакты из заметки")
+    product = memory.label(request["product"]) if request.get("product") else None
+    day = memory.iso(request["observed"]) if request.get("observed") else None
+    category = "Конкуренты" if "конкурент" in text.casefold() else "Пользовательская заметка"
+    identifier = memory.digest([text, product, day])
+    ai_store.store_excerpts("note:" + identifier, [
+        {"id": identifier, "kind": category, "ref": "Заметка оператора", "text": text,
+         "product": product, "observed_at": day, "locator": {"origin": "user_reported"}}
+    ])
+    return {"status": "reported", "category": category, "id": identifier}
+
+
+def reidentification(text):
+    import re
+    return re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}|\+\d[\d ()-]{9,}", text)

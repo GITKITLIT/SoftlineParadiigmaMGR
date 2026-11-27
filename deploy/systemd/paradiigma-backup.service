@@ -1,0 +1,22 @@
+[Unit]
+Description=Independent ParadiigmaMGR verified SQLite backup
+RequiresMountsFor=/var/lib/paradiigma /var/lib/paradiigma-backup
+
+[Service]
+Type=oneshot
+User=paradiigma-backup
+Group=paradiigma-backup
+SupplementaryGroups=pim-status
+Environment=PYTHONDONTWRITEBYTECODE=1
+StateDirectory=paradiigma-backup
+StateDirectoryMode=0700
+ReadOnlyPaths=/var/lib/paradiigma
+ReadWritePaths=/var/lib/paradiigma-backup-status
+ExecStart=/usr/bin/python3 /opt/paradiigma/scripts/pim_backup.py create --db /var/lib/paradiigma/ai.sqlite3 --directory /var/lib/paradiigma-backup --status-file /var/lib/paradiigma-backup-status/status.json
+TimeoutStartSec=180
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true

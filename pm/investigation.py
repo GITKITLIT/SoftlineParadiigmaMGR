@@ -5,6 +5,7 @@ import time
 from uuid import uuid4
 
 from . import ai_store, qwen
+from .memory import redact
 from .agent import investigate, off_topic
 from .analysis_context import InvestigationContext
 from .cross_analysis import correlate, strengthen
@@ -12,12 +13,14 @@ from .product_decisions import task_proposals
 
 
 def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
-            snapshot_loader=None, previous=None, persist=True):
+            snapshot_loader=None, previous=None, persist=True, progress=None):
     started = time.perf_counter()
     query = request.get("query", "")
     config = request.get("config", {})
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
         raise ValueError("Введите вопрос до 500 символов и корректные настройки")
+    query = redact(query)
+    request = request | {"query": query}
     context = InvestigationContext(query, request, collector=collector, meter=meter,
                                    snapshot_loader=snapshot_loader, remember=persist)
     planner = decide if decide is not None else qwen.planner() if infer is None else None
@@ -25,7 +28,7 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
     if screened:
         trace, planning_usage, termination = [{"step": "scope", "status": "out_of_scope", "actor": "server"}], {}, "out_of_scope"
     else:
-        trace, planning_usage, termination = investigate(context, planner)
+        trace, planning_usage, termination = investigate(context, planner, progress=progress)
     if termination != "out_of_scope" and context.evidence and "backlog" in context.available and "backlog" not in context.completed:
         check = context.run("backlog", {})
         trace.append({"step": "tool", "tool": "backlog", "actor": "server",
@@ -74,9 +77,13 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         status, hypotheses, usage, reason = "not_needed" if screened else "ok", [], {}, None
     elif skip_synthesis:
         status, hypotheses, usage, reason = "not_needed", [], {}, "measurement_only"
+    elif comparison and not any(word in query.casefold() for word in ("почему", "гипотез", "как проверить")):
+        status, hypotheses, usage, reason = "not_needed", [], {}, "historical_measurement"
     elif infer is not None:
         status, hypotheses, usage, reason = infer(query, evidence)
     else:
+        if progress:
+            progress({"step": "synthesis", "status": "running"})
         status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False, facts=findings)
     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
     if termination == "out_of_scope":
@@ -95,7 +102,7 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
         if len(kept) < len(hypotheses):
             limits.append("Отклонена гипотеза, описание которой заявляло падение заказов без сигнала в данных.")
         hypotheses = kept
-    if status != "ok" and not hypotheses and core and core["values"]["delta"] is not None and core["values"]["delta"] < 0:
+    if status not in {"ok", "not_needed"} and not hypotheses and core and core["values"]["delta"] is not None and core["values"]["delta"] < 0:
         hypotheses = [dict(
             problem="Снижение индекса заказов", cause="Изменение поведения или измерения требует проверки",
             verify="Сопоставить шаги покупки и регистрацию событий по сегментам до изменения",
@@ -123,6 +130,24 @@ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
             "Проверить влияние на самостоятельные заказы до оценки эффекта." if core
             else "Проверить влияние на выбранный продуктовый сценарий."
         )
+    if hypotheses and persist:
+        from .history import past_decisions, primary_signatures
+        from .research import tokens
+        past = [row for row in past_decisions(mode, query, limit=20, internal=True) if row["decision"] == "reject"]
+        current = primary_signatures(evidence)
+        def already_rejected(item):
+            subject = tokens(item["cause"])
+            used = {current[ref] for ref in item["evidence_ids"] if ref in current}
+            for row in past:
+                prior = tokens(row["hypothesis"])
+                if prior and subject and len(subject & prior) / len(subject | prior) >= 0.7:
+                    if used <= set(row["primary_signatures"]):
+                        return True
+            return False
+        count = len(hypotheses)
+        hypotheses = [item for item in hypotheses if not already_rejected(item)]
+        if len(hypotheses) < count:
+            limits.append("Сходное ранее отклонённое решение исключено: новых подтверждающих данных не найдено.")
     effect_plan = dict(
         primary_kpi="orders_index_4w",
         baseline=core["values"]["baseline_4w"] if core else None,

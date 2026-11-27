@@ -1,0 +1,31 @@
+[Unit]
+Description=ParadiigmaMGR local product intelligence backend
+After=network-online.target
+
+[Service]
+Type=simple
+User=paradiigma
+Group=paradiigma
+SupplementaryGroups=pim-status
+WorkingDirectory=/opt/paradiigma
+Environment=PM_PRIVATE_DIR=/var/lib/paradiigma
+Environment=PM_DB_MAX_MIB=2048
+Environment=PM_BACKUP_STATUS_FILE=/var/lib/paradiigma-backup-status/status.json
+Environment=PM_MIGRATION_STATUS_FILE=/var/lib/paradiigma-backup-status/status.json
+EnvironmentFile=-/etc/paradiigma/backend.env
+ExecStart=/opt/paradiigma/.venv/bin/python /opt/paradiigma/app.py serve --port 8080
+StateDirectory=paradiigma
+StateDirectoryMode=0750
+UMask=0027
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=-/var/lib/paradiigma-backup-status
+InaccessiblePaths=-/var/lib/paradiigma-backup -/etc/paradiigma-backup
+
+[Install]
+WantedBy=multi-user.target

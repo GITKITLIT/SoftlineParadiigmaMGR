@@ -116,7 +116,7 @@ def strengthen(hypotheses, evidence):
     for hypothesis in hypotheses:
         confirmed = [by_id[ref] for ref in hypothesis["evidence_ids"] if ref in by_id]
         groups = {item.get("source_group") or item["id"] for item in confirmed
-                  if item["quality"] not in {"incomplete", "snippet", "sampled", "stale", "derived", "historical_context"}
+                  if item["quality"] not in {"incomplete", "snippet", "sampled", "stale", "derived", "historical_context", "reported"}
                   and item["kind"] != "memory_context"
                   and item.get("freshness") not in {"stale", "future"}
                   and not (item["kind"] in {"competitor_local", "competitor_web"}
