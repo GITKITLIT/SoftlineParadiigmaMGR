@@ -24,7 +24,8 @@ python3 -m venv .venv
 umask 077
 export PM_PRIVATE_DIR="$HOME/.local/share/paradiigma-search-acceptance"
 mkdir -p "$PM_PRIVATE_DIR"
-read -r -p 'Утверждённый публичный DNS магазина: ' competitor_domain
+printf 'Утверждённый публичный DNS магазина: '
+IFS= read -r competitor_domain
 export YANDEX_SEARCH_ALLOWED_DOMAINS="$(.venv/bin/python -c 'import json,sys; print(json.dumps([sys.argv[1]]))' "$competitor_domain")"
 export YANDEX_SEARCH_PUBLIC_PRODUCTS='["Kaspersky Endpoint Security"]'
 export YANDEX_SEARCH_ENABLED=true YANDEX_SEARCH_LIVE_SMOKE=true
@@ -66,8 +67,10 @@ export YANDEX_SEARCH_MAX_QUERIES_PER_RUN=1 YANDEX_SEARCH_DAILY_LIMIT=1
 
 ```sh
 git fetch origin feature/ai-core
-git show origin/feature/ai-core:requirements.txt > "$PM_PRIVATE_DIR/ai-core-requirements.txt"
-.venv/bin/python -m pip install -r "$PM_PRIVATE_DIR/ai-core-requirements.txt"
+ai_requirements=$(mktemp)
+git show origin/feature/ai-core:requirements.txt > "$ai_requirements"
+.venv/bin/python -m pip install -r "$ai_requirements"
+rm -- "$ai_requirements"
 .venv/bin/python scripts/search_verify_ai_core.py --ai-ref origin/feature/ai-core
 ```
 
