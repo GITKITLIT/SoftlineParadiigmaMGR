@@ -379,7 +379,7 @@
       const scope = window.qwenCore.scope();
       const {job_id} = await request("start", {dialog_id: dialogId, question, mode: mode.value,
         scope: {...scope, ...selectedScope}});
-      const deadline = Date.now() + 210000;
+      const deadline = Date.now() + 270000;
       while (Date.now() < deadline) {
         const state = await request("status", {dialog_id: dialogId, job_id});
         if (state.status === "ready") {

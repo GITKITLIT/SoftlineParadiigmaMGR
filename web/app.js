@@ -447,7 +447,7 @@ let pendingMemoryScope = null;
 
 async function runWithProgress(input) {
   const job = await api("analysis/start", input);
-  const deadline = Date.now() + 210000;
+  const deadline = Date.now() + 270000;
   const names = {sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
     research: "Исследования", competitors: "Конкуренты", metrika: "Метрика",
     public_competitors: "Публичные источники", effect: "Эффект", compare_history: "Сравнение периодов",

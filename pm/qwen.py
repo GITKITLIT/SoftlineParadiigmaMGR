@@ -159,7 +159,8 @@ def _infer(query, evidence, opener, planning, facts):
         from llm_lab.synthesis import qualitative_input
         payload = qualitative_input(query, batch, checked_facts)
     data = json.dumps(payload, ensure_ascii=False)
-    deadline = time.monotonic() + 80
+    # Keep a bounded repair window for CPU-only inference as well as accelerated hosts.
+    deadline = time.monotonic() + 180
     for attempt in range(2):
         messages = [{"role": "system", "content": prompt},
                     {"role": "user", "content": data}]
@@ -176,7 +177,7 @@ def _infer(query, evidence, opener, planning, facts):
             "max_tokens": 560, "stream": False, "response_format": response_format,
         }).encode(), headers={"Content-Type": "application/json"})
         try:
-            with opener(request, timeout=min(58, max(1, deadline - time.monotonic()))) as response:
+            with opener(request, timeout=min(110, max(1, deadline - time.monotonic()))) as response:
                 raw = json.loads(response.read(100_000))
             for key, count in token_usage(raw).items():
                 usage[key] = usage.get(key, 0) + count
@@ -279,7 +280,7 @@ def planner():
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             }).encode(), headers={"Content-Type": "application/json"})
-            with opener(request, timeout=min(14, max(1, deadline - time.monotonic()))) as reply:
+            with opener(request, timeout=min(26, max(1, deadline - time.monotonic()))) as reply:
                 raw = json.loads(reply.read(20_000))
             usage = token_usage(raw)
             result = json.loads(strip_wrapper(raw["choices"][0]["message"]["content"]))
