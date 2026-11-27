@@ -23,6 +23,17 @@ mv deploy "$sandbox/core-units"
 cp -R "$source_tree/deploy" deploy
 cp -R "$source_tree/scripts/deploy" scripts/
 cp "$source_tree/scripts/pim_backup.py" scripts/
+# Python 3.12 emits uppercase TO:, while 3.14 uses lowercase to:.
+# Normalize only the synthetic receiver in the disposable test tree.
+python3 - <<'PY'
+from pathlib import Path
+fixture = Path("tests/test_email_notifications.py")
+source = fixture.read_text(encoding="utf-8")
+prefix = 'arg.decode("ascii").removeprefix("to:")'
+if source.count(prefix) != 1:
+    raise SystemExit("Review the SMTP test receiver before running this rehearsal")
+fixture.write_text(source.replace(prefix, 'arg.decode("ascii").split(":", 1)[1]'), encoding="utf-8")
+PY
 git init -q
 git add .
 git -c user.email=synthetic@example.invalid -c user.name='Disposable Core v6 check' commit -qm 'Synthetic tree of pinned components'
