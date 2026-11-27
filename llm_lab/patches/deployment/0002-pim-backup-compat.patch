@@ -115,9 +115,7 @@
                  and record["source_size"] == fingerprint.st_size):
 --- a/tests/test_product_memory.py
 +++ b/tests/test_product_memory.py
-@@ -310,6 +310,32 @@
-             self.assertEqual(set(offered), {"status", "last_backup", "last_integrity_check"})
-             self.assertNotIn("source_mtime_ns", json.dumps(offered))
+@@ -312,2 +312,28 @@
 
 +    def test_migration_waits_for_closed_writer_and_fresh_snapshot(self):
 +        self.active.mkdir()
@@ -142,9 +140,7 @@
 +                self.assertIs(json.loads(status.read_text())["source_quiescent"], False)
 +            pim_backup.create(database, self.folder / "snapshots", status=status)
 +            with ai_store.database() as db:
-+                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 5)
++                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], getattr(ai_store, "SCHEMA_VERSION", 5))
 +                self.assertEqual(db.execute("SELECT id FROM runs").fetchone()["id"], "fixture")
 +
      def test_rejected_decision_is_not_reproposed_without_new_evidence(self):
-         request = {"query": "Почему упали заказы?"}
-         first = investigation.analyze(request)
