@@ -1,0 +1,201 @@
+--- a/pm/agent.py
++++ b/pm/agent.py
+@@ -45,9 +45,9 @@
+     return purpose in FINISH_PURPOSES if tool == "finish" else tool in available and purpose in TOOL_PURPOSES
+
+
+-def investigate(context, decide=None, *, clock=time.monotonic, progress=None):
++def investigate(context, decide=None, *, clock=time.monotonic, progress=None, deadline=None):
+     trace, usage = [], {}
+-    end = clock() + PLAN_SECONDS
++    end = clock() + PLAN_SECONDS if deadline is None else deadline
+     termination = "offline_collection" if decide is None else "step_limit"
+
+     def execute(name, arguments, purpose, actor):
+--- a/pm/qwen.py
++++ b/pm/qwen.py
+@@ -3,8 +3,10 @@
+ import os
+ import re
+ import time
++from dataclasses import dataclass
++from functools import wraps
+ from pathlib import Path
+-from threading import BoundedSemaphore
++from threading import BoundedSemaphore, Lock
+ from urllib.parse import urlsplit
+ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+@@ -23,11 +25,46 @@
+ Пример формы: cause «Фильтр мог скрыть нужный товар», verify «Повторить поиск с фильтром и без него»,
+ expected «Без фильтра нужный товар появится». Это только пример формы, не сведения о текущем случае."""
+ CONCURRENCY = BoundedSemaphore(2)
++INVESTIGATION_ADMISSION = BoundedSemaphore(2)
++INVESTIGATION_SLOT = Lock()
+ FIELDS = ("problem", "cause", "verify", "expected", "missing", "risk")
+ SYNTHESIS_FIELDS = ("cause", "verify", "expected")
+ HYPOTHETICAL_CAUSE = re.compile(r"\b(?:возможн\w*|вероятн\w*|мог(?:ла|ло|ли|ут)?|может|предположительно)\b", re.I)
+ ORDERS_EXPLANATION = re.compile(r"(?:почему|причин|гипотез|произош|что измен|снижен|паден|снизил|упал)",
+                                 re.I)
++
++
++@dataclass(frozen=True)
++class InvestigationBudget:
++    planning: int
++    planning_step: int
++    synthesis: int
++    synthesis_attempt: int
++    total: int
++
++
++SANDY_BRIDGE_BUDGET = InvestigationBudget(280, 95, 210, 170, 500)
++
++
++def single_slot_investigation(analyze):
++    @wraps(analyze)
++    def run(*args, **kwargs):
++        if os.getenv("PM_QWEN_RUNTIME_PROFILE") != "sandy-bridge-one-slot":
++            return analyze(*args, **kwargs)
++        if not INVESTIGATION_ADMISSION.acquire(blocking=False):
++            raise ValueError("Очередь расследований заполнена. Повторите после завершения одного из них.")
++        try:
++            budget = SANDY_BRIDGE_BUDGET
++            if not INVESTIGATION_SLOT.acquire(timeout=budget.total):
++                raise ValueError("Время ожидания запуска расследования истекло. Повторите запрос.")
++            try:
++                return analyze(*args, **kwargs, _budget=budget)
++            finally:
++                INVESTIGATION_SLOT.release()
++        finally:
++            INVESTIGATION_ADMISSION.release()
++
++    return run
+
+
+ class NoRedirect(HTTPRedirectHandler):
+@@ -120,16 +157,16 @@
+     return hypotheses
+
+
+-def infer(query, evidence, *, opener=None, planning=True, facts=()):
++def infer(query, evidence, *, opener=None, planning=True, facts=(), budget=None, deadline=None):
+     if not CONCURRENCY.acquire(blocking=False):
+         return "unavailable", [], {}, "busy"
+     try:
+-        return _infer(query, evidence, opener, planning, facts)
++        return _infer(query, evidence, opener, planning, facts, budget, deadline)
+     finally:
+         CONCURRENCY.release()
+
+
+-def _infer(query, evidence, opener, planning, facts):
++def _infer(query, evidence, opener, planning, facts, budget, deadline):
+     try:
+         url = endpoint()
+         if not url:
+@@ -168,7 +205,10 @@
+         payload = qualitative_input(query, batch, checked_facts)
+     data = json.dumps(payload, ensure_ascii=False)
+     # Keep a bounded repair window for CPU-only inference as well as accelerated hosts.
+-    deadline = time.monotonic() + 180
++    synthesis_end = time.monotonic() + (budget.synthesis if budget else 180)
++    if deadline is not None:
++        synthesis_end = min(synthesis_end, deadline)
++    per_attempt = budget.synthesis_attempt if budget else 110
+     causal_query = ORDERS_EXPLANATION.search(query) and re.search(r"заказ|продаж|индекс", query, re.I)
+     primary_delta = by_id.get("orders:0", {}).get("values", {}).get("delta")
+     primary = "orders:0" if causal_query and primary_delta is not None and primary_delta < 0 else None
+@@ -179,6 +219,9 @@
+             "Покажи, какое отдельное наблюдение может её опровергнуть."
+         )
+     for attempt in range(2):
++        remaining = synthesis_end - time.monotonic()
++        if remaining <= 0:
++            return "unavailable", [], usage, "synthesis_budget_exhausted"
+         messages = [{"role": "system", "content": prompt},
+                     {"role": "user", "content": data}]
+         if attempt:
+@@ -195,7 +238,7 @@
+             "max_tokens": 560, "stream": False, "response_format": response_format,
+         }).encode(), headers={"Content-Type": "application/json"})
+         try:
+-            with opener(request, timeout=min(110, max(1, deadline - time.monotonic()))) as response:
++            with opener(request, timeout=min(per_attempt, remaining)) as response:
+                 raw = json.loads(response.read(100_000))
+             for key, count in token_usage(raw).items():
+                 usage[key] = usage.get(key, 0) + count
+@@ -204,7 +247,7 @@
+         except OSError:
+             return "unavailable", [], usage, "transport_error"
+         except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+-            if attempt or time.monotonic() >= deadline:
++            if attempt or time.monotonic() >= synthesis_end:
+                 return "invalid_response", [], usage, "schema_validation"
+     raise AssertionError("Unreachable repair loop")
+
+@@ -246,7 +289,7 @@
+         return None, {}
+
+
+-def planner():
++def planner(step_seconds=26):
+     try:
+         url = endpoint()
+     except (OSError, ValueError):
+@@ -298,7 +341,10 @@
+                 "messages": [{"role": "system", "content": system},
+                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+             }).encode(), headers={"Content-Type": "application/json"})
+-            with opener(request, timeout=min(26, max(1, deadline - time.monotonic()))) as reply:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                return None, usage
++            with opener(request, timeout=min(step_seconds, remaining)) as reply:
+                 raw = json.loads(reply.read(20_000))
+             usage = token_usage(raw)
+             result = json.loads(strip_wrapper(raw["choices"][0]["message"]["content"]))
+--- a/pm/investigation.py
++++ b/pm/investigation.py
+@@ -12,9 +12,13 @@
+ from .product_decisions import task_proposals
+
+
++@qwen.single_slot_investigation
+ def analyze(request, *, collector=None, meter=None, decide=None, infer=None,
+-            snapshot_loader=None, previous=None, persist=True, progress=None):
++            snapshot_loader=None, previous=None, persist=True, progress=None, _budget=None):
+     started = time.perf_counter()
++    now = time.monotonic()
++    deadline = now + _budget.total if _budget else None
++    planning_end = min(deadline, now + _budget.planning) if _budget else None
+     query = request.get("query", "")
+     config = request.get("config", {})
+     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 500 or not isinstance(config, dict):
+@@ -23,12 +27,14 @@
+     request = request | {"query": query}
+     context = InvestigationContext(query, request, collector=collector, meter=meter,
+                                    snapshot_loader=snapshot_loader, remember=persist)
+-    planner = decide if decide is not None else qwen.planner() if infer is None else None
++    planner = decide
++    if planner is None and infer is None:
++        planner = qwen.planner(_budget.planning_step) if _budget else qwen.planner()
+     screened = off_topic(query)
+     if screened:
+         trace, planning_usage, termination = [{"step": "scope", "status": "out_of_scope", "actor": "server"}], {}, "out_of_scope"
+     else:
+-        trace, planning_usage, termination = investigate(context, planner, progress=progress)
++        trace, planning_usage, termination = investigate(context, planner, progress=progress, deadline=planning_end)
+     if termination != "out_of_scope" and context.evidence and "backlog" in context.available and "backlog" not in context.completed:
+         check = context.run("backlog", {})
+         trace.append({"step": "tool", "tool": "backlog", "actor": "server",
+@@ -108,7 +114,9 @@
+     else:
+         if progress:
+             progress({"step": "synthesis", "status": "running"})
+-        status, hypotheses, usage, reason = qwen.infer(query, evidence, planning=False, facts=findings)
++        status, hypotheses, usage, reason = qwen.infer(
++            query, evidence, planning=False, facts=findings, budget=_budget, deadline=deadline,
++        )
+     usage = {key: planning_usage.get(key, 0) + usage.get(key, 0) for key in planning_usage | usage}
+     if termination == "out_of_scope":
+         summary = "Вопрос за пределами продуктовой аналитики."
