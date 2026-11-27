@@ -48,7 +48,7 @@
 +    total: int
 +
 +
-+SANDY_BRIDGE_BUDGET = InvestigationBudget(280, 95, 210, 170, 500)
++SANDY_BRIDGE_BUDGET = InvestigationBudget(410, 120, 270, 240, 700)
 +
 +
 +def single_slot_investigation(analyze):

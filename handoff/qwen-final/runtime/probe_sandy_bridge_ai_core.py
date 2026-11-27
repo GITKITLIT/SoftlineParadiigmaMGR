@@ -95,8 +95,8 @@ def main():
     if (context, slots) != (8192, 1):
         parser.error(f"Expected one 8192-token slot. Endpoint reported {slots} slots and context {context}")
     budget = qwen.SANDY_BRIDGE_BUDGET
-    if args.profile == "candidate":
-        budget = replace(budget, planning_step=120, planning=410, synthesis_attempt=240, synthesis=270, total=700)
+    if args.profile == "recorded":
+        budget = replace(budget, planning_step=95, planning=280, synthesis_attempt=170, synthesis=210, total=500)
     env = {
         "PM_LLM_URL": f"http://127.0.0.1:{args.port}/v1",
         "PM_QWEN_RUNTIME_PROFILE": "sandy-bridge-one-slot",
