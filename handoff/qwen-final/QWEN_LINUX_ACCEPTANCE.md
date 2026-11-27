@@ -13,11 +13,20 @@
 | Синтетические сценарии через восстановленный локальный SSH | История 1,467 с, расследование 13,333 с, два клиента 27,886 с за пару. Все проверки прошли. |
 | Перезапуск процесса модели при открытом SSH | Локально на Mac: `qwen.ok` сменился `true → false → true`, SSH-процесс сохранился, новый процесс Qwen ответил на запрос. |
 | Совместимость скрипта с API `b12800` | Официальная сборка Mac приняла однослотовый тестовый профиль 6144, K `q8_0` и V `f16`. Исторический запрос прошёл численные сверки, оба шага записали тайм-аут и токены в отчёт. |
-| Linux модельного VPS, SHA GGUF, версия llama.cpp, конфигурация и AppArmor | Отпечаток SSH-хоста сверён. Диагностический вход по ключу завершился отказом аутентификации. Ожидается проверка разрешённого логина и записи публичного ключа владельцем Deployment. |
+| SSH и конфигурация модельного VPS | Вход по согласованному ключу прошёл. Фактически Ubuntu 24.04 LTS x86‑64, 4 vCPU Intel Xeon E312xx Sandy Bridge, 7,75 ГиБ RAM и 1,36 ГиБ swap. AVX и SSE4.2 доступны. AVX2, FMA, F16C и AVX‑512 отсутствуют. |
+| Бинарник и Sandy Bridge backend | На VPS подтверждены `llama.cpp b12800`, commit `47d6192fc`, и `libgomp1` `14.2.0-4ubuntu2~24.04.1`. SHA‑256 бинарника и семи библиотек совпали с архивом. При отдельной диагностике загрузчик инициализировал `libggml-cpu-sandybridge.so` и `libgomp.so.1`. |
+| SHA GGUF, запуск и AppArmor | Каталог весов доступен роли `pm-qwen`. Диагностический аккаунт не имеет доступа к файлу и прав запуска службы. Unit загружен, состояние `inactive`, порт 18081 не слушает. AppArmor `paradiigma-launcher` задан в unit. Проверка хэша, живого процесса и профиля enforce ожидает запуска оператором. |
 | История, полное синтетическое расследование и пара клиентов на Linux | Измерения ожидаются. |
 | Постоянный канал Backend → модель, восстановление после перезапуска systemd | Ожидается подтверждение со стороны Backend и согласованное окно. |
 
 ## 1. Сверка модельного узла
+
+На развернутом узле разрешения каталога `/var/lib/paradiigma/models` составляют `0750 root:pm-qwen`. Для первой серии Максим выполняет две команды в согласованное окно. Если `sha256sum` подтвердит ожидаемое значение из [runtime-инструкции](QWEN_FINAL_RUNTIME.md), он запускает установленную службу.
+
+```sh
+sudo -u pm-qwen /usr/bin/sha256sum /var/lib/paradiigma/models/Qwen3-4B-Q4_K_M.gguf
+sudo /usr/bin/systemctl start paradiigma-qwen.service
+```
 
 Выполнить read-only диагностику на модельном VPS. В отчёт для команды сохранить только аппаратные характеристики, версии, хэш и разрешённые агрегаты. Не переносить адреса, ключи, содержимое EnvironmentFile или рабочие тексты.
 
@@ -32,7 +41,7 @@ systemctl show paradiigma-qwen.service \
 sudo ss -lntp 'sport = :18081'
 sudo sha256sum /var/lib/paradiigma/models/Qwen3-4B-Q4_K_M.gguf
 dpkg-query -W -f='${Status} ${Version}\n' libgomp1
-runtime=/usr/local/lib/llama-b12800
+runtime=/usr/local/lib/paradiigma-llama-b12800
 env LD_LIBRARY_PATH="$runtime" ldd /usr/local/bin/llama-server
 env LD_LIBRARY_PATH="$runtime" ldd "$runtime/libggml-cpu-sandybridge.so"
 env LD_LIBRARY_PATH="$runtime" GGML_BACKEND_PATH="$runtime/libggml-cpu-sandybridge.so" \
@@ -92,7 +101,7 @@ python3 handoff/qwen-final/sample_linux_resources.py > "$resource_log"
 ```sh
 umask 077
 trial=$(mktemp -d)
-runtime=/usr/local/lib/llama-b12800
+runtime=/usr/local/lib/paradiigma-llama-b12800
 env LD_LIBRARY_PATH="$runtime" GGML_BACKEND_PATH="$runtime/libggml-cpu-sandybridge.so" \
   python scripts/qwen/production_benchmark.py \
   --server /usr/local/bin/llama-server --model /var/lib/paradiigma/models/Qwen3-4B-Q4_K_M.gguf \

@@ -36,15 +36,15 @@ PM_QWEN_QUALITATIVE=true
 
 Релиз `b12800`, commit `47d6192fce301f627c4d3e1c6910588c364dce0e`. Официальный файл `llama-b12800-bin-ubuntu-x64.tar.gz`, SHA‑256 `5cdb713ff7ba383095308139e7a27ac2f68781e2999253c9ff343543d8fa4426`. Архив скачан и проверен локально. ELF-метаданные `libggml-cpu-sandybridge.so` содержат зависимость `libgomp.so.1`. Установить штатный пакет Ubuntu `libgomp1`. Бинарник и библиотеки одной версии размещаются под уже разрешёнными путями AppArmor. [Релиз llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b12800) · [libgomp1 для Ubuntu 24.04](https://packages.ubuntu.com/noble/libgomp1)
 
-В согласованное окно Максим устанавливает проверенный `/usr/local/bin/llama-server` обычным файлом. Библиотеки размещает в root-owned `/usr/local/lib/llama-b12800`, отдельно от других версий. Для сервера из проверенного архива нужны перечисленные ниже файлы, включая целевые версии относительных ссылок. `install` копирует их содержимое под нужными именами. Существующие файлы и конфигурацию следует сохранить в согласованной точке отката.
+На 1Gb.ru уже установлены `/usr/local/bin/llama-server` и библиотеки в `/usr/local/lib/paradiigma-llama-b12800`. Их SHA‑256 совпали с официальным архивом. Действующий drop-in `runtime.conf` указывает на этот каталог. Команды ниже описывают установку при восстановлении узла. Существующие файлы и конфигурацию следует сохранить в согласованной точке отката.
 
 ```sh
 # Из корня ветки handoff/qwen-final. runtime_source — распакованный каталог llama-b12800.
 sudo apt-get install libgomp1
-sudo install -d -o root -g root -m 0755 /usr/local/lib/llama-b12800
+sudo install -d -o root -g root -m 0755 /usr/local/lib/paradiigma-llama-b12800
 for name in libllama-server-impl.so libllama-common.so.1 libmtmd.so.1 \
   libllama.so.1 libggml.so.1 libggml-base.so.1 libggml-cpu-sandybridge.so; do
-  sudo install -o root -g root -m 0644 "$runtime_source/$name" "/usr/local/lib/llama-b12800/$name"
+  sudo install -o root -g root -m 0644 "$runtime_source/$name" "/usr/local/lib/paradiigma-llama-b12800/$name"
 done
 sudo install -o root -g root -m 0755 "$runtime_source/llama-server" /usr/local/bin/llama-server
 sudo install -d -o root -g root -m 0755 /etc/systemd/system/paradiigma-qwen.service.d
