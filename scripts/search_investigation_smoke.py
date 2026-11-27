@@ -47,7 +47,14 @@ def run():
         expected_ids = {"sales", "funnel", "backlog"} | {item["id"] for item in local + web["items"]}
         found_ids = {item["id"] for item in analysis["hits"]}
         scopes = {item["source"]["scope"] for item in context["observations"]}
-        if not expected_ids <= found_ids or scopes != {"local_study", "search_snippet"}:
+        handoff = context["qwen_context"]
+        handoff_ids = {entry["id"] for entry in handoff["evidence"]}
+        if (
+            not expected_ids <= found_ids or scopes != {"local_study", "search_snippet"}
+            or not handoff["comparisons"] or any(
+                not set(row["evidence_ids"]) <= handoff_ids for row in handoff["comparisons"]
+            )
+        ):
             raise RuntimeError("Не пройдена проверка связей между синтетическими источниками")
         return {
             "mode": "offline",
@@ -56,6 +63,9 @@ def run():
             "backlog_id": snapshot["backlog"]["id"],
             "checks": analysis["checks"],
             "web_usage": web["usage"],
+            "qwen_evidence_ids": sorted(handoff_ids),
+            "qwen_comparisons": len(handoff["comparisons"]),
+            "matrix_rows": len(context["matrix"]["rows"]),
         }
 
 

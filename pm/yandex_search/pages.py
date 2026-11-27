@@ -175,7 +175,7 @@ def _targets(items, config):
 
 def _cached_page(reader, url, source, config, store, warnings):
     names = (source["product"], *config.aliases.get(source["product"], ()))
-    key = hashlib.sha256(repr((url, names, source["topic"], 1)).encode()).hexdigest()
+    key = hashlib.sha256(repr((url, names, source["topic"], 2)).encode()).hexdigest()
     with store.key_lock(key):
         try:
             cached = store.page_get(key, now_utc(), reader.config.ttl)
@@ -208,19 +208,28 @@ def augment_pages(result, *, page_config, search_config, store):
         try:
             page = _cached_page(reader, url, source, search_config, store, notes)
             fragments, attrs = page["fragments"], page["attributes"]
+            origins, conflicts = page["attribute_sources"], page["attribute_conflicts"]
             if (
                 not isinstance(fragments, list) or not all(isinstance(value, str) for value in fragments)
                 or not isinstance(attrs, dict) or not all(isinstance(value, str) for value in attrs.values())
+                or not isinstance(origins, dict) or set(origins) != set(attrs)
+                or any(value not in {"jsonld", "visible"} for value in origins.values())
+                or not isinstance(conflicts, dict) or not all(
+                    type(values) is list and len(values) == 2 and all(isinstance(value, str) for value in values)
+                    for values in conflicts.values()
+                )
                 or not isinstance(page.get("title"), str) or not isinstance(page.get("retrieved_at"), str)
                 or any(search_config.api_key in value for value in (
                     unquote(page["url"]), page["title"], *fragments, *attrs.values(),
+                    *(value for rows in conflicts.values() for value in rows),
                 ))
             ):
                 raise ValueError("invalid_page_cache")
             text = "\n".join(fragments)
-            if attrs:
-                labels = " | ".join(f"{name}={value}" for name, value in attrs.items())
-                text = (text + "\n[JSON-LD] " + labels).strip()
+            markup = [f"{name}={value}" for name, value in attrs.items() if origins[name] == "jsonld"]
+            markup.extend(f"{name}={values[0]}" for name, values in conflicts.items())
+            if markup:
+                text = (text + "\n[JSON-LD] " + " | ".join(markup)).strip()
             url = page["url"]
             digest = hashlib.sha256((url + "\0" + text).encode("utf-8")).hexdigest()[:32]
             key = "web:" + digest
@@ -229,10 +238,11 @@ def augment_pages(result, *, page_config, search_config, store):
                 "domain": urlsplit(url).hostname, "title": page["title"] or source["title"],
                 "text": text[:2000], "retrieved_at": page["retrieved_at"], "published_at": None,
                 "content_type": "page_excerpt", "topic": source["topic"], "query": source["query"],
-                "product": source["product"], "attributes": attrs,
+                "product": source["product"], "attributes": attrs, "attribute_conflicts": conflicts,
                 "provenance": {
                     "discovered_url": source["url"], "method": "static_html",
                     "search_evidence_ids": [], "checked_sections": len(fragments),
+                    "attribute_sources": origins,
                 },
             })
             ids = item["provenance"]["search_evidence_ids"]

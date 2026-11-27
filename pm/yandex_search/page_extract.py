@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import date
 from html.parser import HTMLParser
 
 from pm.competitor_sources import _read_metadata
@@ -25,6 +26,8 @@ _CHALLENGE = re.compile(
     r"captcha|verify (?:that )?you are (?:a )?human|"
     r"подтвердите,? что вы (?:человек|не робот)|проверка (?:браузера|безопасности)", re.I,
 )
+_UX_FIELDS = {"license_selection", "purchase_flow", "self_checkout", "payment", "consultation",
+              "support", "account", "renewal", "services", "assortment", "availability", "features"}
 _HIDDEN_CLASSES = {"hidden", "sr-only", "visually-hidden", "d-none", "display-none"}
 
 
@@ -168,7 +171,30 @@ def _published_attributes(blobs, names):
                 if isinstance(prop, dict) and _type(prop, "PropertyValue"):
                     labels.append((_safe_scalar(prop.get("name")), _safe_scalar(prop.get("value"))))
     labels.append(("продукт", _safe_scalar(item.get("name"))))
-    return _read_metadata(labels)
+    attrs = _read_metadata(labels)
+    expiry = _safe_scalar(offer.get("priceValidUntil"))
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", expiry):
+        try:
+            attrs["price_valid_until"] = date.fromisoformat(expiry).isoformat()
+        except ValueError:
+            pass
+    return attrs
+
+
+def _visible_attributes(blocks):
+    pairs = []
+    offers = []
+    for block in blocks:
+        labeled = [field.split(":", 1) for field in re.split(r"[;|]", block) if ":" in field]
+        labeled = [(key.strip(), _safe_scalar(value)) for key, value in labeled]
+        values = _read_metadata(labeled)
+        if values.get("price"):
+            offers.append(values)
+        pairs.extend(labeled)
+    result = {key: value for key, value in _read_metadata(pairs).items() if key in _UX_FIELDS}
+    if len(offers) == 1:
+        result = offers[0] | result
+    return result
 
 
 def extract_page(html, *, names, topic, secret):
@@ -192,8 +218,17 @@ def extract_page(html, *, names, topic, secret):
         and (_name_match(text, names) or ((attributes or heading_matches)
              and any(word in text.casefold() for word in topics)))
     ][:4]
-    safe_attributes = {key: value for key, value in attributes.items() if secret not in value}
-    if not (safe_attributes or selected):
+    visible = _visible_attributes(selected)
+    conflicts = {key: [value, visible[key]] for key, value in attributes.items()
+                 if key in visible and value.casefold() != visible[key].casefold()}
+    safe_attributes = {key: value for key, value in (visible | attributes).items()
+                       if secret not in value and key not in conflicts}
+    conflicts = {key: values for key, values in conflicts.items() if all(secret not in v for v in values)}
+    origins = {key: "jsonld" if key in attributes else "visible" for key in safe_attributes}
+    if not (safe_attributes or selected or conflicts):
         raise SearchFailure("page_no_evidence")
     title = page.title if secret not in page.title else ""
-    return {"title": title, "fragments": selected, "attributes": safe_attributes}
+    return {
+        "title": title, "fragments": selected, "attributes": safe_attributes,
+        "attribute_sources": origins, "attribute_conflicts": conflicts,
+    }

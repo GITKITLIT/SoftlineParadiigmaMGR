@@ -32,6 +32,7 @@ class ComparisonTests(unittest.TestCase):
     def context(self, own=OWN, local=LOCAL, web=WEB):
         return build_comparison_context(
             own_evidence=own, local_evidence=[local], web_result=ENVELOPE | {"items": [web]},
+            as_of="2026-11-27",
         )
 
     def test_compares_matching_dated_terms_and_marks_snippet_unverified(self):

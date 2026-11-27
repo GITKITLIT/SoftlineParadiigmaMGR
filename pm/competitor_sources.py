@@ -29,11 +29,18 @@ _FIELDS = {
     "валюта": "currency", "currency": "currency",
     "ндс": "tax", "vat": "tax",
     "метрика": "metric", "показатель": "metric", "metric": "metric",
+    "характеристика": "metric", "критерий": "metric", "feature": "metric",
     "единица": "unit", "единица измерения": "unit", "unit": "unit",
     "дата исследования": "study_date", "дата проверки": "study_date", "study date": "study_date",
     "наличие": "availability", "availability": "availability",
     "подбор лицензии": "license_selection", "путь покупки": "purchase_flow",
-    "консультация": "consultation",
+    "консультация": "consultation", "консультации": "consultation",
+    "поддержка": "support", "support": "support", "ассортимент": "assortment",
+    "самостоятельная покупка": "self_checkout", "оплата": "payment",
+    "способы оплаты": "payment", "личный кабинет": "account",
+    "продление": "renewal", "продление лицензий": "renewal",
+    "дополнительные сервисы": "services", "сервисные преимущества": "services",
+    "подписка": "subscription", "тип подписки": "subscription", "характеристики": "features",
 }
 
 
@@ -111,10 +118,12 @@ def _read_metadata(pairs):
     return {key: value for key, value in fields.items() if key not in conflicts}
 
 
-def _xlsx_records(path, data, limit):
+def _xlsx_records(path, data, archive, limit):
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
+    from .yandex_search.tables import table_records, workbook_merges
 
+    sources = workbook_merges(archive)
     data.seek(0)
     book = load_workbook(data, read_only=True, data_only=True, keep_links=False)
     records = []
@@ -122,30 +131,16 @@ def _xlsx_records(path, data, limit):
         for sheet in book.worksheets:
             if re.sub(r"[\W_]+", "", sheet.title.casefold()) == _FORBIDDEN_SHEET:
                 continue
-            headers = {}
             sheet.reset_dimensions()
-            for index, row in enumerate(sheet.iter_rows(max_col=_MAX_COLUMNS, values_only=True), 1):
-                if index > _MAX_ROWS:
-                    break
-                populated = [(col, value, _display(value)) for col, value in enumerate(row, 1)
-                             if value is not None]
-                cells = [(col, value, text) for col, value, text in populated if text]
-                if not cells:
-                    continue
-                recognized = {col: text for col, _, text in cells if text.casefold() in _FIELDS}
-                if len(recognized) >= 2 or len(recognized) == len(cells):
-                    headers = recognized
-                    continue
-                metadata = _read_metadata((headers.get(col, ""), value) for col, value, _ in cells)
-                first = get_column_letter(cells[0][0])
-                last = get_column_letter(cells[-1][0])
-                area = f"{first}{index}" if first == last else f"{first}{index}:{last}{index}"
-                text = " | ".join(
-                    f"{headers.get(col, get_column_letter(col))}: {value}"
-                    for col, _, value in cells
-                )
-                records.append(_record(path, f"{sheet.title}!{area}", text, metadata,
-                                       sheet=sheet.title, range=area))
+
+            def locate(row, first, last):
+                start, end = get_column_letter(first), get_column_letter(last)
+                area = f"{start}{row}" if start == end else f"{start}{row}:{end}{row}"
+                return f"{sheet.title}!{area}", {"sheet": sheet.title, "range": area}
+
+            rows = sheet.iter_rows(max_col=_MAX_COLUMNS, values_only=True)
+            for record in table_records(path, rows, sources.get(sheet.title, ()), locate):
+                records.append(record)
                 if len(records) >= limit:
                     return records
     finally:
@@ -172,22 +167,54 @@ def _pptx_order(archive):
 
 
 def _pptx_records(path, archive, limit):
+    from .yandex_search.tables import presentation_table, table_records
+
     records = []
     for position, entry in enumerate(_pptx_order(archive), 1):
         slide = safe_xml(archive.read(entry), _MAX_MEMBER)
+        tables = slide.findall(".//{*}tbl")
+        table_paragraphs = {id(node) for table in tables for node in table.iterfind(".//{*}p")}
         paragraphs = [
             plain_text("".join(run.text or "" for run in node.iterfind(".//{*}t")), 500)
-            for node in slide.iterfind(".//{*}p")
+            for node in slide.iterfind(".//{*}p") if id(node) not in table_paragraphs
         ]
         text = "\n".join(line for line in paragraphs if line)
-        if not text:
-            continue
         labeled = [paragraph.split(":", 1) for paragraph in paragraphs if ":" in paragraph]
         metadata = _read_metadata((label.strip(), value.strip()) for label, value in labeled)
-        records.append(_record(path, f"слайд {position}", text, metadata, slide=position))
+        if text:
+            records.append(_record(path, f"слайд {position}", text, metadata, slide=position))
+        for number, table in enumerate(tables, 1):
+            if len(records) >= limit:
+                return records[:limit]
+            rows, merges = presentation_table(table)
+
+            def locate(row, first, last):
+                locator = f"слайд {position} · таблица {number} · строка {row} · столбцы {first}–{last}"
+                return locator, {"slide": position, "table": number, "row": row, "columns": [first, last]}
+
+            inherited = {key: metadata[key] for key in ("product", "study_date") if key in metadata}
+            for item in table_records(path, rows, merges, locate, shared=inherited):
+                records.append(item)
+                if len(records) >= limit:
+                    return records
         if len(records) >= limit:
             break
     return records
+
+
+def merge_competitor_corpus(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Add evidence by ID while retaining existing interviews, sources and ordering."""
+    if not isinstance(existing, list) or not isinstance(incoming, list):
+        raise ValueError("invalid_evidence_corpus")
+    merged = {}
+    for item in [*existing, *incoming]:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(field), str) and item[field].strip()
+            for field in ("id", "ref", "kind", "text")
+        ):
+            raise ValueError("invalid_evidence_record")
+        merged.setdefault(item["id"], item)
+    return list(merged.values())
 
 
 def load_competitor_evidence(
@@ -204,7 +231,7 @@ def load_competitor_evidence(
     try:
         with ZipFile(data) as archive:
             _inspect_zip(archive)
-            entries = _xlsx_records(path, data, limit) if suffix == ".xlsx" else (
+            entries = _xlsx_records(path, data, archive, limit) if suffix == ".xlsx" else (
                 _pptx_records(path, archive, limit)
             )
         return [item | {"imported_at": utc_stamp(datetime.now(UTC))} for item in entries]
