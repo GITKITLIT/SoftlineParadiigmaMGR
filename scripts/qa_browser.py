@@ -365,22 +365,76 @@ with TemporaryDirectory() as d:
             section("overview")
             expect(t.locator("#connectionStatus")).to_contain_text("Демонстрационный режим")
             expect(m.locator("#source")).to_contain_text("сохранённый отчёт")
-            # A successful AI response can be exercised without a provider call.
+            # Reuse the local report to exercise connection states without a provider call.
             run_id = report_url.split("#report=", 1)[1]
             saved = t.request.post(f"{base}api/analysis/report", data={"run_id": run_id})
             assert saved.ok
-            successful = ctx.new_page()
-            successful.route("**/api/analysis/start", lambda route: route.fulfill(json={"job_id": "ready-test"}))
-            successful.route(status_route, lambda route: route.fulfill(json={
-                "status": "ready", "run_id": run_id,
-                "phases": [{"step": "synthesis", "status": "running"}],
-            }))
-            successful.route("**/api/analysis/report", lambda route: route.fulfill(json=saved.json() | {"llm_status": "ok"}))
-            successful.goto(base + "#agent")
-            successful.locator("#infer").click()
-            expect(successful.locator("#ai")).to_contain_text("Результат ИИ")
-            expect(successful.locator("#runPhases li")).to_have_count(0)
-            successful.close()
+            report = saved.json()
+            settings_route = "**/api/analysis/settings"
+            for width in (1440, 320):
+                diagnostics = b.new_context(viewport={"width": width, "height": 900},
+                                            is_mobile=width == 320, has_touch=width == 320)
+                page = diagnostics.new_page()
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                badge = page.locator("#connectionStatus")
+                summary = page.locator("#analysisDiagnostics")
+                model = page.locator("#connectionDetails").get_by_text("ИИ-модуль", exact=True)
+                model = model.locator("xpath=following-sibling::dd[1]")
+                pending = []
+                page.route(settings_route, lambda route: pending.append(route))
+
+                def load_settings(reload=False):
+                    with page.expect_request(settings_route):
+                        if reload:
+                            page.reload(wait_until="domcontentloaded")
+                        else:
+                            page.goto(base + "#settingsPanel", wait_until="domcontentloaded")
+                    expect(badge).to_have_attribute("data-state", "loading")
+                    expect(summary).to_have_text("Проверяем параметры локального сервера…")
+                    return pending.pop()
+
+                def expect_connection(state, label):
+                    expect(badge).to_have_attribute("data-state", state)
+                    expect(badge).to_have_attribute("title", label)
+                    expect(model).to_have_text(label)
+                    expect(summary).to_contain_text(label)
+                    expect(summary).to_be_visible()
+                    expect(page.locator("#settingsPanel")).not_to_contain_text(re.compile("qwen", re.I))
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+                settings = {"model_configured": True, "metrika_configured": False, "monitor_interval": 0,
+                            "public_domains": [], "public_products": []}
+                load_settings().fulfill(json=settings)
+                expect_connection("configured", "Подключение настроено, ответ ещё не проверен")
+                configured_dot = badge.locator("span").evaluate("(dot) => getComputedStyle(dot).backgroundColor")
+
+                page.route("**/api/analysis/start", lambda route: route.fulfill(json={"job_id": "ready-test"}))
+                page.route(status_route, lambda route: route.fulfill(json={
+                    "status": "ready", "run_id": run_id,
+                    "phases": [{"step": "synthesis", "status": "running"}],
+                }))
+                for status, state, label in (
+                    ("ok", "online", "Ответ ИИ подтверждён"),
+                    ("unavailable", "configured", "Подключение настроено. Последний результат получен аналитическим расчётом"),
+                    ("invalid_response", "configured", "Подключение настроено. Ответ ИИ не прошёл проверку. Показан результат аналитического расчёта"),
+                ):
+                    reply = report | {"llm_status": status}
+                    page.route("**/api/analysis/report", lambda route: route.fulfill(json=reply), times=1)
+                    section("agent", page)
+                    page.locator("#infer").click()
+                    expect(page.locator("#ai")).to_contain_text("Результат ИИ" if status == "ok" else "Аналитический режим")
+                    expect(page.locator("#runPhases li")).to_have_count(0)
+                    badge.click()
+                    expect_connection(state, label)
+
+                load_settings(reload=True).fulfill(json=settings | {"model_configured": False})
+                expect_connection("disabled", "ИИ-модуль не подключён")
+                assert badge.locator("span").evaluate("(dot) => getComputedStyle(dot).backgroundColor") != configured_dot
+                load_settings(reload=True).fulfill(status=503, json={"error": "Qwen недоступен"})
+                expect_connection("unknown", "Статус ИИ-модуля неизвестен")
+                expect(summary).to_contain_text("Не удалось получить настройки подключений")
+                expect(page.locator("#connectionDetails")).to_contain_text("Не удалось получить настройки подключений")
+                diagnostics.close()
 
             # Exercise the working label with a synthetic response and isolated storage.
             def working_label(route):
@@ -401,7 +455,7 @@ with TemporaryDirectory() as d:
             assert not errors, errors
             print(
                 "UI PASS · navigation, periods, cancel, edit, persistence, duplicate, separate browser, evidence upload/search, fallback, failed run and retry,"
-                " AI success, chat draft approval and export, goal, missing API, mobile, flat snapshot"
+                " AI success, chat draft approval and export, connection states and 503, goal, missing API, mobile, flat snapshot"
             )
             b.close()
     finally:

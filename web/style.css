@@ -35,6 +35,7 @@ button:disabled { opacity: .55; cursor: default; }
 .topbar-status { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: .65rem; min-width: 0; }
 .connection-status, .run-indicator { display: inline-flex; align-items: center; gap: .5rem; color: #dcecf7; text-decoration: none; border: 1px solid #42606b; border-radius: 24px; padding: .32rem .7rem; font-size: .79rem; white-space: nowrap; }
 .connection-status span { width: .45rem; height: .45rem; border-radius: 50%; background: #9bb0bc; }
+.connection-status[data-state="disabled"] span { background: transparent; border: 1px solid #9bb0bc; }
 .connection-status[data-state="configured"] span { background: #f1c583; }
 .connection-status[data-state="online"] { background: #1b5148; color: #d1f5e4; border-color: #408476; }
 .connection-status[data-state="online"] span { background: #82e5b8; }

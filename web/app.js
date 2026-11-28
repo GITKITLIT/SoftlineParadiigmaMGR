@@ -154,15 +154,43 @@ function renderConnections() {
   const badge = $("#connectionStatus");
   const settings = connectionSettings;
   const online = settings && !settings.error;
-  const model = !settings ? "Проверяем настройки" : !online ? "Статус подключения неизвестен"
-    : !settings.model_configured ? "ИИ-модуль не подключён"
-    : lastModelResult || "Подключение настроено, ответ ещё не проверен";
-  badge.dataset.state = !settings || !online ? "unknown"
-    : lastModelResult === "Ответ ИИ подтверждён" ? "online" : "configured";
-  badge.querySelector("strong").textContent = workspaceMode();
+  const loading = "Проверяем параметры локального сервера…";
+  const settingsError = "Не удалось получить настройки подключений";
+  const mode = workspaceMode();
+  let state = "unknown", server, model, diagnostics;
+  if (offline) {
+    server = "Открыт сохранённый HTML-отчёт";
+    model = "Статус ИИ-модуля неизвестен";
+    diagnostics = "Запустите локальный сервер, чтобы проверить подключения.";
+  } else if (!settings) {
+    state = "loading";
+    server = model = diagnostics = loading;
+  } else if (!online) {
+    server = settingsError;
+    model = "Статус ИИ-модуля неизвестен";
+    diagnostics = server + ". " + model;
+  } else {
+    const modelLabels = {
+      ok: "Ответ ИИ подтверждён",
+      unavailable: "Подключение настроено. Последний результат получен аналитическим расчётом",
+      invalid_response: "Подключение настроено. " + resultNotice("invalid_response"),
+    };
+    state = !settings.model_configured ? "disabled" : lastModelResult === "ok" ? "online" : "configured";
+    server = "Отвечает";
+    model = state === "disabled" ? "ИИ-модуль не подключён"
+      : modelLabels[lastModelResult] || "Подключение настроено, ответ ещё не проверен";
+    diagnostics = [
+      model,
+      settings.metrika_configured ? "Параметры Метрики заданы" : "Метрика не настроена",
+      settings.monitor_interval ? "Мониторинг каждые " + settings.monitor_interval + " с" : "Мониторинг по расписанию выключен",
+    ].join(" · ");
+  }
+  badge.dataset.state = state;
+  badge.querySelector("strong").textContent = mode;
   badge.title = model;
-  const rows = [["Сервер приложения", !settings ? "Проверяем" : online ? "Отвечает" : settings.error],
-    ["ИИ-модуль", model],
+  badge.setAttribute("aria-label", mode + ". " + model);
+  text("#analysisDiagnostics", diagnostics);
+  const rows = [["Сервер приложения", server], ["ИИ-модуль", model],
     ["Яндекс.Метрика", online ? settings.metrika_configured ? "Настроена" : "Не настроена" : "Статус неизвестен"],
     ["Анализ конкурентов", online ? settings.public_domains.length ? "Источники настроены" : "Источники не настроены" : "Статус неизвестен"],
     ["Мониторинг", online ? settings.monitor_interval ? "Каждые " + settings.monitor_interval + " с" : "Расписание выключено" : "Статус неизвестен"]];
@@ -170,8 +198,8 @@ function renderConnections() {
 }
 
 function modelResult(status) {
-  if (status === "ok") lastModelResult = "Ответ ИИ подтверждён";
-  if (["unavailable", "invalid_response"].includes(status)) lastModelResult = "Последний результат получен аналитическим расчётом";
+  if (!["ok", "unavailable", "invalid_response"].includes(status)) return;
+  lastModelResult = status;
   renderConnections();
 }
 
@@ -1171,22 +1199,15 @@ $("#checkNow").onclick = async () => {
 if (!offline) api("analysis/settings", {}).then((settings) => {
   connectionSettings = settings;
   renderConnections();
-  text("#analysisDiagnostics", [
-    settings.model_configured ? "ИИ-модуль настроен" : "ИИ-модуль не подключён",
-    settings.metrika_configured ? "Параметры Метрики заданы" : "Метрика не настроена",
-    settings.monitor_interval ? "Мониторинг каждые " + settings.monitor_interval + " с" : "Мониторинг по расписанию выключен",
-  ].join(" · "));
   if (settings.public_products.length && settings.public_domains.length) {
     $("#publicSearch").hidden = false;
     for (const value of settings.public_products) $("#publicProduct").append(node("option", value));
     for (const value of settings.public_domains) $("#publicDomains").append(node("option", value));
   }
-}).catch((error) => { connectionSettings = {error: error.message}; renderConnections(); });
-else {
-  connectionSettings = {error: "Открыт сохранённый HTML-отчёт"};
+}).catch(() => {
+  connectionSettings = {error: true};
   renderConnections();
-  text("#analysisDiagnostics", "Запустите локальный сервер, чтобы проверить подключения.");
-}
+});
 $("#txt").onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
