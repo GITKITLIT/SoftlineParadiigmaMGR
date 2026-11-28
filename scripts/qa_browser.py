@@ -125,7 +125,7 @@ with TemporaryDirectory() as d:
             t.locator("#mode").select_option("actual")
             expect(t.locator("#effectResult")).to_contain_text("Ожидаем")
             t.get_by_text("Загрузить новые недели").click()
-            f = json.loads((root / "data/effect-demo.json").read_text())
+            f = json.loads((root / "data/effect-demo.json").read_text(encoding="utf-8"))
             f["rows"][-1]["kaspersky"] = 20
             t.locator("#weeksFile").set_input_files(
                 {
@@ -186,7 +186,7 @@ with TemporaryDirectory() as d:
             expect(t.locator("#serverTasks")).to_contain_text("согласована")
             with t.expect_download() as exported:
                 t.get_by_role("button", name="Экспорт Redmine").click()
-            assert "сгенерирована ИИ-помощником" in exported.value.path().read_text()
+            assert "сгенерирована ИИ-помощником" in exported.value.path().read_text(encoding="utf-8")
             section("journal")
             t.locator("#dailyDigest").click()
             expect(t.locator("#digestStatus")).to_contain_text("Синтетические · расследований 1")
