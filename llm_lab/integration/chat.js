@@ -19,14 +19,14 @@
     search_history: "Поиск в памяти", competitor_history: "Исторические цены", product_history: "История продукта"};
   const states = {waiting: "ожидание", ok: "готово", running: "выполняется", missing: "нет данных", partial: "частично",
     disabled: "выключен", unavailable: "недоступен", error: "ошибка", not_checked: "не проверен"};
-  const phases = {queue: "В очереди к модели", decision: "Выбор источника", synthesis: "Синтез гипотез"};
+  const phases = {queue: "В очереди к ИИ", decision: "Выбор источника", synthesis: "Синтез гипотез"};
   let dialogId = "", busy = false, selectedScope, opened = false, movement, skipClick = false, animation;
   let anchor;
   try { anchor = JSON.parse(localStorage.getItem("pm.chat.position")); } catch { /* browser setting */ }
 
   function element(tag, text) {
     const item = document.createElement(tag);
-    if (text) item.textContent = text;
+    if (text) item.textContent = window.dashboard.publicCopy(text);
     return item;
   }
 
@@ -35,7 +35,7 @@
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data),
     });
     const result = await response.json();
-    if (!response.ok) throw Error(result.error || "Запрос не выполнен.");
+    if (!response.ok) throw Error(window.dashboard.publicCopy(result.error || "Запрос не выполнен."));
     return result;
   }
 
@@ -119,13 +119,15 @@
 
   function lock(value) {
     busy = value;
-    dialogSelect.disabled = newDialog.disabled = form.querySelector("button").disabled = value;
+    const submit = form.querySelector("button");
+    dialogSelect.disabled = newDialog.disabled = submit.disabled = value;
+    submit.title = value ? "Дождитесь завершения текущего запроса" : "";
   }
 
   async function refreshDialogs() {
     const {dialogs} = await request("dialogs");
     dialogSelect.replaceChildren(...dialogs.map((dialog) => {
-      const option = element("option", dialog.label?.slice(0, 70) || "Новый диалог");
+      const option = element("option", [dialog.label?.slice(0, 65) || "Новый диалог", window.dashboard.presentTime(dialog.updated)].filter(Boolean).join(" · "));
       option.value = dialog.id;
       return option;
     }));
@@ -186,7 +188,7 @@
   function source(item) {
     const row = element("div");
     row.append(element("strong", item.ref));
-    const origin = [item.id, item.quality, item.data_mode, item.observed_at, item.freshness].filter(Boolean);
+    const origin = [window.dashboard.visibleStatus(item.quality), window.dashboard.dataModeLabel(item.data_mode), window.dashboard.presentTime(item.observed_at)].filter(Boolean);
     row.append(element("p", origin.join(" · ")));
     if (item.kind === "historical_competitor") {
       if (item.terms) row.append(element("p", "Условия · " + item.terms));
@@ -194,7 +196,7 @@
     }
     if (item.text) row.append(element("p", item.text));
     if (item.values && item.kind !== "effect") row.append(element("p", Object.entries(item.values).map(([key, value]) =>
-      key + " · " + (value == null ? "нет данных" : JSON.stringify(value))).join(" / ")));
+      key + " · " + window.dashboard.presentValue(value)).join(" / ")));
     if (item.kind === "competitor_web" && typeof item.locator === "string") {
       const labels = {product: "Продукт", version: "Редакция", license_type: "Тип лицензии", duration: "Срок",
         devices: "Устройства", currency: "Валюта", tax: "Налоги", price: "Цена"};
@@ -220,7 +222,7 @@
     const block = element("div");
     block.append(element("p", view.answer));
     if (view.next_step) block.append(element("p", "Следующий шаг · " + view.next_step));
-    if (view.notice) block.append(element("p", view.notice));
+    if (view.notice) block.append(element("p", window.dashboard.resultNotice(view.llm_status) || view.notice));
     if (!view.sources) return block;
     if (view.data_mode === "synthetic") block.append(element("p", "Синтетические данные"));
     if (view.previous_position) {
@@ -295,7 +297,7 @@
       block.append(details("Шаги расследования", view.trace.filter((item) => item.step === "tool").map((item) => {
         const row = element("div");
         row.append(element("p", [names[item.tool] || item.tool, states[item.status] || item.status,
-          item.actor === "qwen" ? "выбор Qwen" : "серверная проверка"].join(" · ")), cite(view, item.evidence_ids));
+          item.actor === "qwen" ? "выбор ИИ" : "серверная проверка"].join(" · ")), cite(view, item.evidence_ids));
         return row;
       })));
     }
@@ -365,15 +367,15 @@
     const prompt = element("p", question);
     prompt.className = "qwen-user";
     wrapper.append(prompt);
-    if (view) wrapper.append(renderView(view, position));
+    if (view) wrapper.append(element("small", window.dashboard.resultMode(view.llm_status)), renderView(view, position));
     else {
       const button = element("button", "Раскрыть ответ");
-      wrapper.append(element("p", answer), button);
+      wrapper.append(element("small", "Сохранённый ответ"), element("p", answer), button);
       button.onclick = async () => {
         button.disabled = true;
         try {
           const reply = await request("turn", {dialog_id: dialogId, position});
-          wrapper.replaceChildren(prompt, renderView(reply, position));
+          wrapper.replaceChildren(prompt, element("small", "Сохранённый ответ · " + window.dashboard.resultMode(reply.llm_status)), renderView(reply, position));
         } catch (error) { button.textContent = error.message; button.disabled = false; }
       };
     }
@@ -387,7 +389,7 @@
     if (!question) return;
     lock(true);
     progress.textContent = "Запускаем расследование…";
-    window.dashboard?.chatActivity("Qwen готовит ответ");
+    window.dashboard?.chatActivity("ИИ готовит ответ");
     try {
       if (!dialogId) await createDialog();
       const scope = window.qwenCore.scope();

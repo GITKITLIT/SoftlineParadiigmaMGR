@@ -149,7 +149,7 @@ def exercise(run, site, smtp):
                                                           headless=True, viewport={"width": 1400, "height": 950})
         page = browser.pages[0]
         page.goto(link)
-        expect(page.locator("#runDetails")).to_contain_text("Гипотезы Qwen")
+        expect(page.locator("#runDetails")).to_contain_text("Гипотезы ИИ")
         page.locator("#runDetails").screenshot(path=run / "report.png")
         page.locator("#qwen-fab").click()
         first = ask(page, QUESTION, 1)
@@ -296,7 +296,7 @@ def verify_replay(run, site):
         requests = []
         page.on("request", lambda request: requests.append(request.url))
         page.goto(site + "#report=" + evidence["report_id"])
-        expect(page.locator("#runDetails")).to_contain_text("Гипотезы Qwen")
+        expect(page.locator("#runDetails")).to_contain_text("Гипотезы ИИ")
         report = post(browser, site, "analysis/report", {"run_id": evidence["report_id"]})
         assert report == old_report and not any(url.endswith("/analysis/start") for url in requests)
         page.locator("#qwen-fab").click()

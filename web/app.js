@@ -23,13 +23,50 @@ const key =
   "paradiigma.task.v1:" +
   JSON.stringify([data.release_id, data.launch, data.series[0].name]);
 const offline = location.protocol === "file:";
+// Translate rendering only. Keep wire values and element identifiers intact.
+const publicCopy = (value) => typeof value !== "string" ? value : value
+  .replace(/Модель не подключена или ответ не прошёл проверку\. Показан расчёт и поиск\./gi, "Доступен аналитический режим")
+  .replace(/(?:локальная\s+)?\bqwen(?:[\w.-]*[\w])?\b/gi, "ИИ")
+  .replace(/\b(?:PM_[A-Z_]+|METRIKA_(?:COUNTER_ID|TOKEN)|YANDEX_SEARCH_(?:API_KEY|FOLDER_ID))\b/g, "параметры подключения");
+const resultMode = (status) => status === "ok" ? "Результат ИИ" : "Аналитический режим";
+const resultNotice = (status) => status === "invalid_response"
+  ? "Ответ ИИ не прошёл проверку. Показан результат аналитического расчёта"
+  : status === "unavailable" ? "Доступен аналитический режим" : "";
+const dataModeLabel = (mode) => ({
+  local: "рабочие данные", synthetic: "синтетические данные", demo_counter: "тестовый счётчик",
+})[mode] || "режим данных не указан";
+const visibleStatus = (status) => ({
+  ok: "готово", complete: "полные данные", partial: "данные неполные", missing: "нет данных",
+  disabled: "выключено", unavailable: "недоступно", error: "ошибка проверки", ready: "готово",
+  not_checked: "ещё не проверено", skipped: "пропущено", snippet: "поисковый фрагмент",
+  primary: "первоисточник", sampled: "выборка", empty: "ничего не найдено", running: "выполняется",
+  failed: "проверка не прошла", unknown: "неизвестно",
+})[status] || "статус не уточнён";
+const workspaceMode = () => /^Синтетическая/i.test(data.source) ? "Демонстрационный режим" : "Рабочий режим";
+const numberRu = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 2});
+function presentTime(value) {
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return dateRu(value);
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? value
+    : time.toLocaleString("ru-RU", {dateStyle: "short", timeStyle: "short", timeZone: "UTC"}) + " UTC";
+}
+function presentValue(value) {
+  if (value == null) return "нет данных";
+  if (typeof value === "number") return numberRu.format(value);
+  if (typeof value === "boolean") return value ? "да" : "нет";
+  if (Array.isArray(value)) return value.map(presentValue).join(", ");
+  if (typeof value === "object") return Object.entries(value)
+    .map(([name, item]) => name + " — " + presentValue(item)).join(" · ");
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? presentTime(value) : publicCopy(value);
+}
 const node = (tag, t) => {
   const e = document.createElement(tag);
-  e.textContent = t;
+  e.textContent = publicCopy(t);
   return e;
 };
 const text = (id, t) => {
-  $(id).textContent = t;
+  $(id).textContent = publicCopy(t);
 };
 const values = (f) => Object.fromEntries(new FormData(f));
 const dateRu = (s) => s.split("-").reverse().join(".");
@@ -118,24 +155,23 @@ function renderConnections() {
   const settings = connectionSettings;
   const online = settings && !settings.error;
   const model = !settings ? "Проверяем настройки" : !online ? "Статус подключения неизвестен"
-    : !settings.model_configured ? "Адрес модели не задан"
-    : lastModelResult || "Адрес настроен, ответ ещё не проверен";
+    : !settings.model_configured ? "ИИ-модуль не подключён"
+    : lastModelResult || "Подключение настроено, ответ ещё не проверен";
   badge.dataset.state = !settings || !online ? "unknown"
-    : lastModelResult === "Подтверждён ответ Qwen" ? "online" : "configured";
-  badge.querySelector("strong").textContent = !settings ? "Проверяем подключение" : !online ? "Нет данных о подключении"
-    : lastModelResult === "Подтверждён ответ Qwen" ? "Qwen ответила"
-    : !settings.model_configured ? "Локальный режим" : "Qwen настроена";
-  const rows = [["Backend", !settings ? "Проверяем" : online ? "Отвечает" : settings.error],
-    ["Qwen", model],
+    : lastModelResult === "Ответ ИИ подтверждён" ? "online" : "configured";
+  badge.querySelector("strong").textContent = workspaceMode();
+  badge.title = model;
+  const rows = [["Сервер приложения", !settings ? "Проверяем" : online ? "Отвечает" : settings.error],
+    ["ИИ-модуль", model],
     ["Яндекс.Метрика", online ? settings.metrika_configured ? "Настроена" : "Не настроена" : "Статус неизвестен"],
-    ["Публичный поиск", online ? settings.public_domains.length ? "Источники настроены" : "Источники не настроены" : "Статус неизвестен"],
+    ["Анализ конкурентов", online ? settings.public_domains.length ? "Источники настроены" : "Источники не настроены" : "Статус неизвестен"],
     ["Мониторинг", online ? settings.monitor_interval ? "Каждые " + settings.monitor_interval + " с" : "Расписание выключено" : "Статус неизвестен"]];
   $("#connectionDetails").replaceChildren(...rows.flatMap(([label, value]) => [node("dt", label), node("dd", value)]));
 }
 
 function modelResult(status) {
-  if (status === "ok") lastModelResult = "Подтверждён ответ Qwen";
-  if (["unavailable", "invalid_response"].includes(status)) lastModelResult = "Последний отчёт не содержит ответа Qwen";
+  if (status === "ok") lastModelResult = "Ответ ИИ подтверждён";
+  if (["unavailable", "invalid_response"].includes(status)) lastModelResult = "Последний результат получен аналитическим расчётом";
   renderConnections();
 }
 
@@ -202,7 +238,7 @@ window.dashboard = {
   inChat: () => visibleWorkspace === "qwen",
   closeChat: () => navigate(returnFromChat),
   chatActivity: (label) => setActivity("chat", label),
-  modelResult,
+  modelResult, publicCopy, resultMode, resultNotice, presentTime, presentValue, visibleStatus, dataModeLabel,
 };
 renderMenu();
 setMobileMenu(false);
@@ -238,7 +274,7 @@ async function api(route, input) {
     body: JSON.stringify(input),
   });
   const a = await r.json();
-  if (!r.ok) throw Error(a.error || "Не удалось выполнить запрос");
+  if (!r.ok) throw Error(publicCopy(a.error || "Не удалось выполнить запрос"));
   return a;
 }
 function drawChart(container) {
@@ -360,13 +396,14 @@ function render() {
       dateRu(c.after_start) +
       "–" +
       dateRu(c.after_end);
-  text("#source", data.source + " · недельные индексы");
+  text("#source", (workspaceMode() + (/^Синтетическая/i.test(data.source) ? " · синтетические данные" : "")) + (offline ? " · сохранённый отчёт" : ""));
   text("#release", [data.release_id, "Запуск " + dateRu(data.launch)].filter(Boolean).join(" · "));
   text("#releaseContext", $("#release").textContent);
   text("#overviewPeriod", dates);
   const comparison = data.series[1]?.name;
   text("#legend", "Синий — " + data.series[0].name +
-    (comparison ? ", бирюзовый — " + comparison + "." : ". Контрольной группы нет."));
+    (comparison ? ", бирюзовый — " + comparison + " (контроль)." : ". Контрольной группы нет.") +
+    " Пунктир — недельный индекс, сплошная — среднее за четыре недели. Вертикальный штрих — дата запуска, жёлтая полоса — неполная неделя.");
   text(
     "#period",
     (c.metric === "orders_index"
@@ -469,9 +506,8 @@ function render() {
       data.backlog.title +
       " (" +
       data.backlog.status +
-      "). В карточке релиза указана " +
-      data.release_task +
-      ".",
+      "). Связанная задача в карточке релиза — " + data.release_task + "." +
+      (data.release_task && data.backlog.id !== data.release_task ? " Обнаружено расхождение идентификаторов." : ""),
   );
   const f = $("#settings");
   for (const e of f.elements) if (e.name) e.value = c[e.name];
@@ -488,7 +524,7 @@ function showHits(hits) {
   for (const x of hits) {
     const a = node("article", "");
     a.id = "src-" + x.id;
-    a.append(node("strong", x.kind + " · " + x.ref), node("p", x.text));
+    a.append(node("strong", x.ref), node("small", [x.kind, presentTime(x.observed_at || x.retrieved)].filter(Boolean).join(" · ")), node("p", x.text));
     c.append(a);
   }
 }
@@ -658,7 +694,7 @@ let pendingMemoryScope = null;
 async function runWithProgress(input) {
   const job = await api("analysis/start", input);
   const deadline = Date.now() + (job.wait_seconds ?? 270) * 1000;
-  const names = {queue: "В очереди к модели", synthesis: "Синтез гипотез",
+  const names = {queue: "В очереди к ИИ", synthesis: "Синтез гипотез",
     sales: "Продажи", funnel: "Воронка", releases: "Релизы", backlog: "Бэклог",
     research: "Исследования", competitors: "Конкуренты", metrika: "Метрика",
     public_competitors: "Публичные источники", effect: "Эффект", compare_history: "Сравнение периодов",
@@ -670,7 +706,7 @@ async function runWithProgress(input) {
     const events = result.phases.filter((event) => ["queue", "tool", "synthesis"].includes(event.step));
     $("#runPhases").replaceChildren(...events.map((event) =>
       node("li", (names[event.tool] || names[event.step] || event.tool) +
-      " · " + (statuses[event.status] || event.status))));
+      " · " + (statuses[event.status] || visibleStatus(event.status)))));
     if (events.length) setActivity("agent", names[events.at(-1).tool] || names[events.at(-1).step] || "Идёт расследование");
     if (result.status === "ready") return api("analysis/report", {run_id: result.run_id});
     if (result.status === "failed") throw Error(result.message || "Расследование завершилось с ошибкой. Проверьте настройки и источники.");
@@ -719,11 +755,9 @@ $("#infer").onclick = async (e) => {
     proposal = res.hypothesis || res.proposal || "";
     proof = res.refs || [];
     ai.textContent = [
-      res.mode,
-      res.hypothesis,
-      res.proposal,
-      res.notice,
-      res.seconds + " с",
+      resultMode(res.llm_status),
+      resultNotice(res.llm_status),
+      presentValue(res.seconds) + " с",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -733,7 +767,7 @@ $("#infer").onclick = async (e) => {
       ai.append(link);
     }
   } catch (err) {
-    ai.textContent = err.message;
+    ai.textContent = publicCopy(err.message);
     text("#runSummary", "Расследование не завершено.");
   } finally {
     e.target.disabled = false;
@@ -745,21 +779,26 @@ function renderInvestigation(report) {
   if (isRelease) document.dispatchEvent(new CustomEvent("qwen-release-report", {detail: report.run_id}));
   const container = $("#runDetails");
   container.replaceChildren();
-  text("#runSummary", report ? report.summary : "Собираем доказательства…");
+  text("#runSummary", report
+    ? [report.summary, "Сохранённый отчёт", resultMode(report.llm_status), dataModeLabel(report.data_mode)].filter(Boolean).join(" · ")
+    : "Собираем доказательства…");
   renderedReportId = report?.run_id;
   if (!report) return;
+  $("#runPhases").replaceChildren();
+  const notice = resultNotice(report.llm_status);
+  if (notice) container.append(node("p", notice));
   const recommendations = report.recommended_actions || [];
   if (!recommendationReport) renderOverviewRecommendations(report);
   const competitorList = $("#competitorEvidence"), releaseList = $("#releaseEvidence");
   const comparisons = report.evidence.filter((item) => ["competitor_local", "competitor_web"].includes(item.kind));
   const releases = report.evidence.filter((item) => item.kind === "release");
   competitorList.replaceChildren(...(comparisons.length
-    ? comparisons.map((item) => evidenceLinks(item.ref + " · " + item.quality + " · " +
+    ? comparisons.map((item) => evidenceLinks([item.offer?.product || item.attributes?.product, item.domain, item.ref, presentTime(item.observed_at || item.retrieved)].filter(Boolean).join(" · ") + " · " + visibleStatus(item.quality) + " · " +
       (item.freshness === "recent" ? "свежий источник" : "актуальность требует проверки") +
-      (item.offer?.price != null ? " · " + item.offer.price + " " + (item.offer.currency || "") : ""), [item.id]))
-    : [node("p", "Подходящих конкурентных материалов в отчёте нет.")]));
+      (item.offer?.price != null ? " · " + presentValue(item.offer.price) + " " + (item.offer.currency || "") : ""), [item.id]))
+    : [node("p", "В отчёте нет подходящих конкурентных материалов. Проверьте сохранённые наблюдения в базе знаний или добавьте разрешённые источники в расследование.")]));
   releaseList.replaceChildren(...(releases.length
-    ? releases.map((item) => evidenceLinks(item.ref + " · " + (item.observed_at || "дата неизвестна"), [item.id]))
+    ? releases.map((item) => evidenceLinks(item.ref + " · " + (presentTime(item.observed_at) || "дата неизвестна"), [item.id]))
     : [node("p", "Релизы в отчёте отсутствуют.")]));
   const status = { ok: "доступен", partial: "частично", disabled: "выключен",
     missing: "нет данных", unavailable: "недоступен", error: "ошибка", not_checked: "ещё не проверен" };
@@ -772,11 +811,12 @@ function renderInvestigation(report) {
   };
   const sourceBlock = section("Доступность источников");
   const labels = {sales: "Продажи", research: "Исследования", release: "Релиз",
-    backlog: "Бэклог", competitor_web: "Конкуренты в интернете",
+    backlog: "Бэклог", funnel: "Воронка", historical_metrics: "Исторические метрики", memory: "База знаний", competitor_web: "Конкуренты в интернете",
     competitor_local: "Локальные данные о конкурентах", metrika: "Яндекс.Метрика",
     effect: "Замер после выпуска"};
   for (const [name, value] of Object.entries(report.sources_status)) {
-    sourceBlock.append(node("p", (labels[name] || name) + " · " + (status[value.status] || value.status)));
+    sourceBlock.append(node("p", (labels[name] || "Дополнительный источник") + " · " + (status[value.status] || visibleStatus(value.status)) +
+      (value.reason === "different_current_data_mode" ? " · источник относится к другому режиму данных" : "")));
   }
   const steps = (report.trace || []).filter((item) => item.step === "tool");
   if (steps.length) {
@@ -786,15 +826,15 @@ function renderInvestigation(report) {
       backlog: "Бэклог", public_competitors: "Публичные источники", effect: "Оценка эффекта" };
     for (const step of steps) {
       history.append(evidenceLinks(
-        (tools[step.tool] || step.tool) + " · " + (status[step.status] || step.status) +
-        (step.actor === "qwen" ? " · выбор Qwen" : " · автоматический сбор"),
+        (tools[step.tool] || "Дополнительная проверка") + " · " + (status[step.status] || visibleStatus(step.status)) +
+        (step.actor === "qwen" ? " · выбор ИИ" : " · автоматический сбор"),
         step.evidence_ids,
       ));
     }
   }
   const findings = section("Наблюдения");
   for (const item of report.findings) findings.append(evidenceLinks(item.text, item.evidence_ids));
-  const hypotheses = section(report.llm_status === "ok" ? "Гипотезы Qwen" : "Гипотезы по правилам", true);
+  const hypotheses = section(report.llm_status === "ok" ? "Гипотезы ИИ" : "Гипотезы по правилам", true);
   for (const item of report.hypotheses) {
     const row = evidenceLinks(item.problem + " · " + item.cause, item.evidence_ids);
     row.append(node("p", "Проверка до разработки · " + item.verify));
@@ -823,7 +863,7 @@ function renderInvestigation(report) {
     for (const [label, refs] of [["Новые", change.added], ["Обновлённые", change.updated]]) {
       if (refs.length) updates.append(evidenceLinks(label, refs));
     }
-    if (change.removed.length) updates.append(node("p", "Убраны из контекста · " + change.removed.join(", ")));
+    if (change.removed.length) updates.append(node("p", "Убрано из контекста: " + change.removed.length));
     if (!change.added.length && !change.updated.length && !change.removed.length) {
       updates.append(node("p", "Состав доказательств и показатели не изменились."));
     }
@@ -857,9 +897,14 @@ function renderInvestigation(report) {
   for (const item of report.evidence) {
     const article = node("article", "");
     article.id = "evidence-" + item.id;
-    article.append(node("strong", item.ref + " · " + item.data_mode + " · " + item.quality));
+    article.append(node("strong", item.ref + " · " + dataModeLabel(item.data_mode) + " · " + visibleStatus(item.quality)));
     if (item.text) article.append(node("p", item.text));
-    if (item.values) article.append(node("p", Object.entries(item.values).map(([k, v]) => k + " = " + (v ?? "нет данных")).join(" · ")));
+    if (item.values) {
+      const details = node("details", "");
+      details.append(node("summary", "Данные источника"),
+        node("p", Object.entries(item.values).map(([k, v]) => k + " — " + presentValue(v)).join(" · ")));
+      article.append(details);
+    }
     if (item.locator && item.kind === "competitor_web") {
       try {
         const url = new URL(item.locator);
@@ -923,6 +968,7 @@ function proposalForm(report, item) {
   reasonLabel.append(reason);
   const accept = node("button", "Согласовать");
   accept.disabled = baseline == null;
+  accept.title = baseline == null ? "Для согласования нужен исходный индекс" : "";
   const reject = node("button", "Отклонить");
   reject.type = "button";
   const output = node("p", "");
@@ -960,7 +1006,8 @@ function effectReviewText(review) {
   const details = [review.mode === "simulation" ? "Симуляция" : "",
     review.recommendation];
   if (review.measurement) {
-    details.push("Новый индекс " + fmt(review.measurement.kaspersky) + " при цели " + fmt(review.plan.target));
+    details.push("Исходный индекс " + fmt(review.plan.baseline), "Цель " + fmt(review.plan.target),
+      "Контрольный ряд " + fmt(review.measurement.astra), "Измеренный индекс " + fmt(review.measurement.kaspersky));
     if (review.control_adjusted_change_pp != null) {
       details.push("Разница изменений с контролем " + fmt(review.control_adjusted_change_pp) + " п. п.");
     }
@@ -1000,7 +1047,7 @@ async function reloadRuns() {
     for (const item of journal.notifications || []) {
       if (item.status !== "ready") continue;
       const mail = emailStatuses[item.email_status];
-      const alert = node("p", "Сигнал мониторинга · " + item.created.slice(0, 10) +
+      const alert = node("p", "Сигнал мониторинга · " + presentTime(item.created) +
         (mail ? " · почта " + mail : ""));
       const link = node("a", "Отчёт по сигналу");
       link.href = "#report=" + item.run_id;
@@ -1008,11 +1055,11 @@ async function reloadRuns() {
       history.append(alert);
     }
     for (const [index, item] of journal.runs.entries()) {
-      const label = item.summary || "Расследование от " + item.created.slice(0, 10);
+      const label = item.summary || (item.data_mode === "synthetic" ? "Синтетическое расследование заказов" : "Сохранённое расследование");
       const link = node("a", label);
       link.className = "report-row";
       link.href = "#report=" + item.run_id;
-      link.append(node("small", item.created.replace("T", " ").slice(0, 16) + " UTC"));
+      link.append(node("small", presentTime(item.created)));
       history.append(link);
       if (index < 3) overview.append(link.cloneNode(true));
     }
@@ -1032,8 +1079,13 @@ async function reloadRuns() {
     if (!backlog.tasks.length) tasks.append(node("p", "Пока нет согласованных или отклонённых предложений."));
     for (const item of backlog.tasks) {
       const row = node("article", "");
-      row.append(node("p", [item.title, item.decision === "accept" ? "согласована" : "отклонена",
+      row.append(node("h3", item.title), node("p", [item.id, presentTime(item.created), item.decision === "accept" ? "согласована" : "отклонена",
         item.tag].filter(Boolean).join(" · ")));
+      if (item.run_id) {
+        const source = node("a", "Открыть расследование");
+        source.href = "#report=" + item.run_id;
+        row.append(source);
+      }
       if (item.decision === "accept") {
         const label = node("label", item.data_mode === "synthetic" ? "JSON для симуляции" : "JSON с наблюдениями");
         const file = document.createElement("input");
@@ -1071,7 +1123,7 @@ async function reloadRuns() {
           } catch (error) { flash(error.message); }
           finally { exportButton.disabled = false; }
         };
-        row.append(label, status, exportButton);
+        row.append(status, exportButton, label, node("small", "Для оценки приложите JSON с четырьмя полными неделями."));
       }
       if (window.qwenAskWithScope && item.decision === "accept") {
         const ask = node("button", "Обсудить эффект в чате");
@@ -1112,7 +1164,7 @@ if (!offline) api("analysis/settings", {}).then((settings) => {
   connectionSettings = settings;
   renderConnections();
   text("#analysisDiagnostics", [
-    settings.model_configured ? "Адрес модели настроен" : "Адрес модели не задан",
+    settings.model_configured ? "ИИ-модуль настроен" : "ИИ-модуль не подключён",
     settings.metrika_configured ? "Параметры Метрики заданы" : "Метрика не настроена",
     settings.monitor_interval ? "Мониторинг каждые " + settings.monitor_interval + " с" : "Мониторинг по расписанию выключен",
   ].join(" · "));
@@ -1168,7 +1220,7 @@ async function evaluateEffect() {
     text(
       "#effectResult",
       (mode === "demo"
-        ? "Синтетический тест · "
+        ? "Симуляция · Синтетический тест · "
         : "Загруженные данные команды · ") +
         r.status +
         (r.start
@@ -1205,7 +1257,7 @@ $("#weeksFile").onchange = async (e) => {
     if (f.size > 100000) throw Error("Файл слишком большой");
     observation = JSON.parse(await f.text());
     if (!Array.isArray(observation?.rows) || !observation.fix)
-      throw Error("Нужны fix и rows");
+      throw Error("В JSON укажите дату исправления (fix) и четыре недели наблюдений (rows)");
     $("#mode").value = "actual";
     await evaluateEffect();
   } catch (err) {
@@ -1288,15 +1340,17 @@ $("#meter").onsubmit = async (e) => {
       r.available
         ? r.source +
             " · " +
-            r.start +
+            presentTime(r.start) +
             "–" +
-            r.end +
+            presentTime(r.end) +
             " · визитов " +
-            r.value +
+            presentValue(r.value) +
             " · получено " +
-            r.retrieved +
+            presentTime(r.retrieved) +
             (r.sampled ? " · выборка" : "")
-        : r.message,
+        : r.reason === "not_configured" || !connectionSettings?.metrika_configured
+          ? "Метрика недоступна: подключение счётчика не настроено."
+          : publicCopy(r.message || "Метрика недоступна для выбранного периода."),
     );
   } catch (err) {
     text("#meterResult", err.message);
@@ -1332,6 +1386,7 @@ showHits(boot.evidence);
 
 
 const memoryMode = () => $("#memoryMode").value;
+if (!offline && /^Синтетическая/i.test(data.source)) $("#memoryMode").value = "synthetic";
 async function refreshMemory() {
   const mode = memoryMode();
   try {
@@ -1429,7 +1484,7 @@ $("#memoryCompare").onsubmit = async (event) => {
     const result = await api("memory/compare", memoryComparison());
     const line = result.status === "ok"
       ? fmt(result.before.value) + " → " + fmt(result.after.value) + " · изменение " + fmt(result.delta)
-      : "Окна несопоставимы или неполны · " + result.before.status + " / " + result.after.status;
+      : "Окна несопоставимы или неполны · " + visibleStatus(result.before.status) + " / " + visibleStatus(result.after.status);
     $("#memoryResult").replaceChildren(node("p", line), ...result.warnings.map((warning) => node("p", warning)));
   } catch (error) { text("#memoryResult", error.message); }
 };

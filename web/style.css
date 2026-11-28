@@ -168,3 +168,22 @@ article p { margin: .28rem 0; }
   .brand-mark { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+#runSummary { font-size: 1.08rem; line-height: 1.5; font-weight: 600; }
+#runDetails article, #hits article, #serverTasks article { overflow-wrap: anywhere; }
+#hits small, #serverTasks small { color: var(--muted); display: block; }
+#serverTasks article h3 { margin: .4rem 0; }
+#serverTasks article > label { margin-top: .75rem; }
+#agent-results, [id^="evidence-"], [id^="qwen-turn-"] {
+  scroll-margin-top: calc(var(--header-height) + 1.25rem);
+}
+@media print {
+  .topbar { position: static; color: #18323c; background: #fff; }
+  .sidebar, .nav-scrim, .mobile-menu, .skip-link, #qwen-fab, #toast, .topbar-status { display: none !important; }
+  .app-shell, .overview-layout { display: block; }
+  main, .workspace { width: auto; max-width: none; padding: 0; }
+  .panel, .cards { box-shadow: none; page-break-inside: avoid; }
+  #agent-results { page-break-inside: auto; }
+  #qwen-log { max-height: none !important; overflow: visible !important; }
+  svg { max-width: 100%; }
+}

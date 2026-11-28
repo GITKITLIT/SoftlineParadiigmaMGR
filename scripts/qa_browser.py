@@ -1,4 +1,4 @@
-import os, sys, subprocess, time, urllib.request, json, shutil, re
+import os, sys, subprocess, time, urllib.request, json, shutil, re, socket
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -23,23 +23,29 @@ with TemporaryDirectory() as d:
                   PM_QWEN_OWNER_MODE="local")
     flat = path / "build" / "index.html"
     subprocess.run(
-        [sys.executable, "app.py", "build", "--output", str(flat)],
-        cwd=path, env=qa_env, check=True,
+        [sys.executable, str(path / "app.py"), "build", "--output", str(flat)],
+        cwd=root, env=qa_env, check=True,
     )
     subprocess.run(
         [sys.executable, str(root / "scripts/cost.py"), "--output", str(flat.parent / "cost.xlsx")],
-        cwd=path, env=qa_env, check=True,
+        cwd=root, env=qa_env, check=True,
     )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    base = f"http://127.0.0.1:{port}/"
     server = subprocess.Popen(
-        [sys.executable, "app.py", "serve", "--port", "18112"], cwd=path, env=qa_env
+        [sys.executable, str(path / "app.py"), "serve", "--port", str(port)], cwd=root, env=qa_env
     )
     try:
         for _ in range(50):
             try:
-                with urllib.request.urlopen("http://127.0.0.1:18112/", timeout=1):
+                with urllib.request.urlopen(base, timeout=1):
                     break
             except OSError:
                 time.sleep(0.15)
+        else:
+            raise RuntimeError("The isolated Dashboard did not start")
         with sync_playwright() as pw:
             b = pw.chromium.launch(
                 executable_path=os.getenv("PM_CHROMIUM") or None,
@@ -50,7 +56,6 @@ with TemporaryDirectory() as d:
             errors = []
             t.on("pageerror", lambda e: errors.append(str(e)))
             t.on("console", lambda msg: errors.append(msg.text) if "Content Security Policy" in msg.text else None)
-            base = "http://127.0.0.1:18112/"
             proxy = render_proxy("acceptance.example.org", "production", qwen_chat=True)
             csp = re.search(r'add_header Content-Security-Policy "([^"]+)"', proxy)[1]
             def enforce_csp(route):
@@ -85,7 +90,7 @@ with TemporaryDirectory() as d:
             expect(group).to_have_attribute("aria-expanded", "false")
             group.click()
 
-            assert t.request.get("http://127.0.0.1:18112/cost.xlsx").ok
+            assert t.request.get(f"{base}cost.xlsx").ok
             expect(t.locator("#cards")).to_contain_text("30,0%")
             t.locator("#cards a").first.click()
             assert t.url.endswith("#dynamics")
@@ -168,7 +173,7 @@ with TemporaryDirectory() as d:
             expect(t.locator("#activeInvestigation")).to_be_visible()
             expect(t.locator("#overviewRuns .report-row").first).to_be_visible(timeout=12000)
             t.locator("#overviewRuns .report-row").first.click()
-            expect(t.locator("#ai")).to_contain_text("Модель не подключена")
+            expect(t.locator("#ai")).to_contain_text("Доступен аналитический режим")
             expect(t.locator("#runDetails")).to_contain_text("Доступность источников")
             expect(t.locator("#runDetails")).to_contain_text("Действия агента")
             expect(t.locator("#runDetails")).to_contain_text("Гипотезы по правилам")
@@ -213,7 +218,7 @@ with TemporaryDirectory() as d:
             t.locator("#settings button").click()
             expect(t.locator("#period")).to_contain_text("24.03.2025")
             t.locator("#meter button").click()
-            expect(t.locator("#meterResult")).to_contain_text("METRIKA_COUNTER_ID")
+            expect(t.locator("#meterResult")).to_contain_text("Метрика недоступна")
             section("competitors")
             t.locator("#priceHistory button").click()
             expect(t.locator("#priceResults")).to_contain_text("Сопоставимых")
@@ -271,7 +276,7 @@ with TemporaryDirectory() as d:
                 responsive.close()
             mobile = b.new_context(viewport={"width": 390, "height": 844})
             m = mobile.new_page()
-            m.goto("http://127.0.0.1:18112/")
+            m.goto(base)
             section("backlog", m)
             expect(m.locator("#saved")).to_contain_text("пока нет")
             assert m.evaluate("document.documentElement.scrollWidth<=window.innerWidth")
@@ -280,16 +285,47 @@ with TemporaryDirectory() as d:
             expect(m.locator("#answer")).to_be_visible()
             m.goto(flat.as_uri())
             expect(m.locator("#cards strong").first).to_have_text("-30,0%")
-            expect(m.locator("#source")).to_contain_text("Синтетическая")
+            expect(m.locator("#source")).to_contain_text("Демонстрационный режим")
             section("sources", m)
             m.locator("#researchSearch input").fill("корзина")
             m.locator("#researchSearch button").first.click()
             expect(m.locator("#hits")).to_contain_text("Демо · событие корзины")
+            for key in sections:
+                section(key)
+                expect(t.locator("[data-workspace]:visible")).not_to_contain_text(re.compile(r"qwen", re.I))
+                assert not re.search(r"qwen", t.title(), re.I)
+            section("overview")
+            expect(t.locator("#connectionStatus")).to_contain_text("Демонстрационный режим")
+            expect(m.locator("#source")).to_contain_text("сохранённый отчёт")
+            # Exercise the working label with a synthetic response and isolated storage.
+            def working_label(route):
+                response = route.fetch()
+                body = response.text()
+                assert "Синтетическая" in body
+                route.fulfill(response=response, body=body.replace("Синтетическая", "Тестовая", 1))
+
+            working = ctx.new_page()
+            working.route(base, working_label)
+            working.goto(base)
+            expect(working.locator("#connectionStatus")).to_contain_text("Рабочий режим")
+            working.close()
+            if output:
+                t.emulate_media(media="print")
+                assert t.locator(".topbar").evaluate("(item) => getComputedStyle(item).position") == "static"
+                t.pdf(path=screenshots / "15-overview-print.pdf", format="A4", print_background=True)
             assert not errors, errors
             print(
                 "UI PASS · navigation, periods, cancel, edit, persistence, duplicate, separate browser, evidence upload/search, fallback, goal, missing API, mobile, flat snapshot"
             )
             b.close()
     finally:
-        server.terminate()
-        server.wait()
+        if server.poll() is None:
+            if os.name == "nt":
+                # The Windows virtualenv launcher can spawn a second Python process.
+                subprocess.run(
+                    ["taskkill.exe", "/PID", str(server.pid), "/T", "/F"],
+                    capture_output=True, check=True,
+                )
+            else:
+                server.terminate()
+        server.wait(timeout=10)
