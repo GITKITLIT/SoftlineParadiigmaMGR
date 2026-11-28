@@ -703,13 +703,21 @@ async function runWithProgress(input) {
     unavailable: "недоступно", partial: "частично", disabled: "выключено"};
   while (Date.now() < deadline) {
     const result = await api("analysis/status", {job_id: job.job_id});
+    const failed = result.status === "failed";
     const events = result.phases.filter((event) => ["queue", "tool", "synthesis"].includes(event.step));
-    $("#runPhases").replaceChildren(...events.map((event) =>
-      node("li", (names[event.tool] || names[event.step] || event.tool) +
-      " · " + (statuses[event.status] || visibleStatus(event.status)))));
+    // The API sends a history of updates. On failure, show only the final status of each phase.
+    const phases = failed
+      ? [...new Map(events.map((event) => [JSON.stringify([event.step, event.tool]), event])).values()]
+      : events;
+    $("#runPhases").replaceChildren(...phases.map((event) => {
+      const status = failed && ["waiting", "running"].includes(event.status)
+        ? "прервано"
+        : statuses[event.status] || visibleStatus(event.status);
+      return node("li", (names[event.tool] || names[event.step] || event.tool) + " · " + status);
+    }));
+    if (failed) throw Error(result.message || "Расследование завершилось с ошибкой. Проверьте настройки и источники.");
     if (events.length) setActivity("agent", names[events.at(-1).tool] || names[events.at(-1).step] || "Идёт расследование");
     if (result.status === "ready") return api("analysis/report", {run_id: result.run_id});
-    if (result.status === "failed") throw Error(result.message || "Расследование завершилось с ошибкой. Проверьте настройки и источники.");
     await new Promise((resolve) => setTimeout(resolve, 650));
   }
   throw Error("Время ожидания истекло. Проверьте журнал для завершённого отчёта.");

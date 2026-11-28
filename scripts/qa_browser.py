@@ -160,6 +160,28 @@ with TemporaryDirectory() as d:
             t.locator("#investigateResearch").click()
             expect(t.locator("#search input")).to_have_value("эквайринг")
             t.locator("#search input").fill("Почему снизились заказы? Проверь воронку, интервью, конкурентов и бэклог.")
+            status_route = "**/api/analysis/status"
+            t.route("**/api/analysis/start", lambda route: route.fulfill(json={"job_id": "failed-test"}), times=1)
+            t.route(status_route, lambda route: route.fulfill(json={
+                "status": "failed", "message": "Не удалось проверить источники.",
+                "phases": [
+                    {"step": "queue", "status": "waiting"},
+                    {"step": "tool", "tool": "funnel", "status": "running"},
+                    {"step": "tool", "tool": "funnel", "status": "ok"},
+                    {"step": "tool", "tool": "sales", "status": "running"},
+                    {"step": "synthesis", "status": "running"},
+                ],
+            }), times=1)
+            t.locator("#infer").click()
+            expect(t.locator("#ai")).to_have_text("Не удалось проверить источники.")
+            expect(t.locator("#runSummary")).to_have_text("Расследование не завершено.")
+            expect(t.locator("#runPhases li")).to_have_text([
+                "В очереди к ИИ · прервано", "Воронка · готово",
+                "Продажи · прервано", "Синтез гипотез · прервано",
+            ])
+            expect(t.locator("#activeInvestigation")).to_be_hidden()
+            expect(t.locator("#infer")).to_be_enabled()
+
             held = []
             def hold_first_status(route):
                 if not held:
@@ -167,13 +189,15 @@ with TemporaryDirectory() as d:
                     route.fulfill(json={"status": "running", "phases": [{"step": "queue", "status": "waiting"}]})
                 else:
                     route.continue_()
-            t.route("**/api/analysis/status", hold_first_status)
+            t.route(status_route, hold_first_status)
             t.locator("#infer").click()
+            expect(t.locator("#runPhases li")).to_have_text(["В очереди к ИИ · ожидание"])
             section("overview")
             expect(t.locator("#activeInvestigation")).to_be_visible()
             expect(t.locator("#overviewRuns .report-row").first).to_be_visible(timeout=12000)
             t.locator("#overviewRuns .report-row").first.click()
             expect(t.locator("#ai")).to_contain_text("Доступен аналитический режим")
+            expect(t.locator("#runPhases li")).to_have_count(0)
             expect(t.locator("#runDetails")).to_contain_text("Доступность источников")
             expect(t.locator("#runDetails")).to_contain_text("Действия агента")
             expect(t.locator("#runDetails")).to_contain_text("Гипотезы по правилам")
@@ -238,11 +262,55 @@ with TemporaryDirectory() as d:
             expect(t.locator("#overview")).to_be_visible()
             assert t.evaluate("window.dashboardNavigationMarker") == 1
             section("qwen")
-            t.locator("#qwen-question").fill("Что известно о воронке?")
-            t.locator("#qwen-ask").get_by_role("button", name="Спросить").click()
+            question = "Почему заказы снизились?"
+            t.locator("#qwen-question").fill(question)
+            ask = t.locator("#qwen-ask").get_by_role("button", name="Спросить")
+            ask.click()
             section("journal")
             section("qwen")
-            expect(t.locator("#qwen-log")).to_contain_text("Что известно о воронке?", timeout=12000)
+            expect(t.locator("#qwen-log")).to_contain_text(question, timeout=12000)
+            expect(ask).to_be_enabled()
+
+            generated_fields = {
+                "title": ("Название", "Проверить вывод Qwen"),
+                "problem_description": ("Описание проблемы", "Уточнить наблюдение Qwen"),
+                "hypothesis": ("Гипотеза", "Сопоставить гипотезу Qwen со статистикой"),
+                "verification": ("Способ проверки", "Сверить проверку Qwen с контрольной группой"),
+            }
+            def add_provider_to_saved_draft(route):
+                response = route.fetch()
+                reply = response.json()
+                reply["drafts"][0].update({key: source for key, (_, source) in generated_fields.items()})
+                route.fulfill(response=response, json=reply)
+
+            t.route("**/api/qwen/turn", add_provider_to_saved_draft, times=1)
+            t.reload()
+            t.get_by_role("button", name="Раскрыть ответ").click()
+            t.get_by_text("Черновики задач", exact=True).click()
+            chat_draft = t.locator("#qwen-log form").first
+            for label, source in generated_fields.values():
+                expect(chat_draft.get_by_label(label, exact=True)).to_have_value(source.replace("Qwen", "ИИ"))
+            tag = "сгенерирована ИИ-помощником"
+            expect(chat_draft).to_contain_text(tag)
+            custom_description = "Пользовательская ссылка на Qwen"
+            chat_draft.get_by_label("Описание проблемы").fill(custom_description)
+            chat_draft.get_by_label("Цель четырёхнедельного индекса").fill("110")
+            with t.expect_request("**/api/qwen/approve") as approval:
+                chat_draft.get_by_role("button", name="Подтвердить сохранение в бэклоге").click()
+            assert approval.value.post_data_json["draft"] == {
+                key: custom_description if key == "problem_description" else source.replace("Qwen", "ИИ")
+                for key, (_, source) in generated_fields.items()
+            }
+            expect(chat_draft.get_by_role("status")).to_have_text("Сохранено в серверном бэклоге.")
+            section("backlog")
+            chat_task = t.locator("#serverTasks article").filter(has_text="Проверить вывод ИИ")
+            with t.expect_download() as chat_export:
+                chat_task.get_by_role("button", name="Экспорт Redmine").click()
+            redmine = json.loads(chat_export.value.path().read_text(encoding="utf-8"))
+            assert redmine["tag"] == tag
+            assert redmine["action"] == "review_existing_priority"
+            assert "Сопоставить гипотезу ИИ со статистикой" in redmine["assessment"]
+            assert "Сверить проверку ИИ с контрольной группой" in redmine["assessment"]
             t.goto(report_url)
             expect(t.locator("#runDetails")).to_contain_text("Гипотезы по правилам")
             citation = t.locator('#runDetails details[open] a[href*="&ref=evidence-"]').first
@@ -259,7 +327,7 @@ with TemporaryDirectory() as d:
                 for index, key in enumerate(sections, 1):
                     section(key)
                     if key == "qwen":
-                        expect(t.locator("#qwen-log")).to_contain_text("Что известно о воронке?")
+                        expect(t.locator("#qwen-log")).to_contain_text(question)
                     t.screenshot(path=screenshots / f"{index:02d}-{key}.png", full_page=True)
             for width, height in ((1024, 820), (768, 1024), (390, 844), (320, 720)):
                 responsive = b.new_context(viewport={"width": width, "height": height}, reduced_motion="reduce")
@@ -297,6 +365,23 @@ with TemporaryDirectory() as d:
             section("overview")
             expect(t.locator("#connectionStatus")).to_contain_text("Демонстрационный режим")
             expect(m.locator("#source")).to_contain_text("сохранённый отчёт")
+            # A successful AI response can be exercised without a provider call.
+            run_id = report_url.split("#report=", 1)[1]
+            saved = t.request.post(f"{base}api/analysis/report", data={"run_id": run_id})
+            assert saved.ok
+            successful = ctx.new_page()
+            successful.route("**/api/analysis/start", lambda route: route.fulfill(json={"job_id": "ready-test"}))
+            successful.route(status_route, lambda route: route.fulfill(json={
+                "status": "ready", "run_id": run_id,
+                "phases": [{"step": "synthesis", "status": "running"}],
+            }))
+            successful.route("**/api/analysis/report", lambda route: route.fulfill(json=saved.json() | {"llm_status": "ok"}))
+            successful.goto(base + "#agent")
+            successful.locator("#infer").click()
+            expect(successful.locator("#ai")).to_contain_text("Результат ИИ")
+            expect(successful.locator("#runPhases li")).to_have_count(0)
+            successful.close()
+
             # Exercise the working label with a synthetic response and isolated storage.
             def working_label(route):
                 response = route.fetch()
@@ -315,7 +400,8 @@ with TemporaryDirectory() as d:
                 t.pdf(path=screenshots / "15-overview-print.pdf", format="A4", print_background=True)
             assert not errors, errors
             print(
-                "UI PASS · navigation, periods, cancel, edit, persistence, duplicate, separate browser, evidence upload/search, fallback, goal, missing API, mobile, flat snapshot"
+                "UI PASS · navigation, periods, cancel, edit, persistence, duplicate, separate browser, evidence upload/search, fallback, failed run and retry,"
+                " AI success, chat draft approval and export, goal, missing API, mobile, flat snapshot"
             )
             b.close()
     finally:

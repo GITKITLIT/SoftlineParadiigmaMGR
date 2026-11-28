@@ -322,7 +322,7 @@
       ["Способ проверки", "verification", 1200]]) {
       const wrapper = element("label", label);
       const field = element("textarea");
-      field.value = draft[key] ?? draft.title;
+      field.value = window.dashboard.publicCopy(draft[key] ?? draft.title);
       field.required = true;
       field.maxLength = length;
       field.rows = 2;
