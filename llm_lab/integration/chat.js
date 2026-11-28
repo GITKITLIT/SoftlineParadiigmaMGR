@@ -70,10 +70,19 @@
   fab.addEventListener("pointerup", endDrag);
   fab.addEventListener("pointercancel", endDrag);
   fab.onclick = (event) => { if (!skipClick || event.detail === 0) open(); };
-  find("#qwen-close").onclick = close;
+  document.addEventListener("dashboard-route", (event) => {
+    if (event.detail === "qwen") open(false);
+    else if (window.dashboard && opened) close(false);
+  });
+  find("#qwen-close").onclick = () => close();
   panel.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
 
-  async function open() {
+  async function open(focus = true) {
+    if (window.dashboard && !window.dashboard.inChat()) {
+      window.dashboard.navigate("qwen");
+      if (focus) input.focus();
+      return;
+    }
     if (opened) return;
     opened = true;
     animation?.cancel();
@@ -83,7 +92,7 @@
     fab.setAttribute("aria-expanded", "true");
     animation = panel.animate([{opacity: 0, transform: "translateY(10px)"}, {opacity: 1, transform: "none"}],
       {duration: reduced.matches ? 0 : 180});
-    input.focus();
+    if (focus) input.focus();
     if (!dialogId && !busy) {
       lock(true);
       try {
@@ -94,14 +103,15 @@
     }
   }
 
-  function close() {
+  function close(leave = true) {
+    if (leave && window.dashboard?.inChat()) { window.dashboard.closeChat(); return; }
     opened = false;
     animation?.cancel();
     panel.inert = true;
     fab.hidden = false;
     place();
     fab.setAttribute("aria-expanded", "false");
-    fab.focus();
+    if (leave) fab.focus();
     animation = panel.animate([{opacity: 1}, {opacity: 0, transform: "translateY(10px)"}],
       {duration: reduced.matches ? 0 : 135});
     animation.onfinish = () => { if (!opened) panel.hidden = true; };
@@ -129,6 +139,9 @@
     log.replaceChildren();
     for (const turn of turns) log.append(turnBlock(turn.question, turn.answer, turn.position));
     log.scrollTop = log.scrollHeight;
+    if (location.hash.startsWith("#qwen-turn-")) {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({block: "nearest"});
+    }
   }
 
   async function createDialog() {
@@ -374,6 +387,7 @@
     if (!question) return;
     lock(true);
     progress.textContent = "Запускаем расследование…";
+    window.dashboard?.chatActivity("Qwen готовит ответ");
     try {
       if (!dialogId) await createDialog();
       const scope = window.qwenCore.scope();
@@ -383,6 +397,7 @@
       while (Date.now() < deadline) {
         const state = await request("status", {dialog_id: dialogId, job_id});
         if (state.status === "ready") {
+          window.dashboard?.modelResult(state.reply.llm_status);
           log.append(turnBlock(question, state.reply.answer, state.position, state.reply));
           log.scrollTop = log.scrollHeight;
           progress.textContent = "";
@@ -399,11 +414,11 @@
       }
       throw Error("Время ожидания истекло. Обновите диалог, чтобы проверить, сохранился ли ответ.");
     } catch (error) { progress.textContent = error.message; }
-    finally { lock(false); if (opened) input.focus(); }
+    finally { window.dashboard?.chatActivity(""); lock(false); if (opened) input.focus(); }
   };
 
   window.qwenAskWithScope = (question, scope) => {
-    if (busy) { progress.textContent = "Дождитесь текущего ответа."; return; }
+    if (busy) { open(); progress.textContent = "Дождитесь текущего ответа."; return; }
     input.value = question;
     selectedScope = scope;
     mode.value = "new_topic";
@@ -414,6 +429,7 @@
     const button = find("#" + id);
     if (button) button.hidden = false;
   }
+  if (window.dashboard?.inChat()) open(false);
   let lastReleaseRun = null;
   const release = find("#qwen-release");
   function renderRelease(view) {

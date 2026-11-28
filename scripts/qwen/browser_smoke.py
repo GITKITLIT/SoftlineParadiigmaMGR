@@ -19,7 +19,9 @@ def smoke(url, question, live, follow_up, effect_plan, measured_task):
         page.on("pageerror", lambda error: errors.append(type(error).__name__))
         page.goto(base)
         if live:
+            page.locator("[data-nav=releases]").click()
             expect(page.locator("#qwen-release")).to_be_visible()
+            page.locator("[data-nav=overview]").click()
         fab = page.locator("#qwen-fab")
         expect(fab).to_be_visible()
         anchor = fab.bounding_box()
@@ -94,20 +96,22 @@ def smoke(url, question, live, follow_up, effect_plan, measured_task):
             expect(second.get_by_text("Источники из предыдущего ответа")).to_be_visible()
         observed = context.request.post(base + "/api/tasks/review", data={"task_id": saved["id"]}).json()
         assert observed["status"] == "waiting_for_data"
+        page.locator("[data-nav=overview]").click()
         page.reload()
         expect(fab).to_be_visible()
         assert fab.bounding_box()["x"] < anchor["x"] - 30
         fab.click()
         expect(panel.get_by_text(question, exact=True)).to_be_visible()
         if effect_plan or measured_task:
-            page.locator("#journal summary").click()
+            page.locator("[data-nav=journal]").click()
             page.locator("#reloadRuns").click()
+            page.locator("[data-nav=qwen]").click()
             for label, status in [(title if effect_plan else None, "Ожидаются четыре полные недели"),
                                   (measured_task, "Цель не достигнута")]:
                 if not label:
                     continue
                 expect(ask).to_be_enabled()
-                page.keyboard.press("Escape")
+                page.locator("[data-nav=backlog]").click()
                 row = page.locator("#serverTasks article").filter(has_text=label)
                 row.get_by_role("button", name="Обсудить эффект в чате").click()
                 ask.click()

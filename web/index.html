@@ -1,42 +1,98 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ParadiigmaMGR · Обзор релиза</title><style>/*STYLE*/</style>
-<header><a class="brand" href="#top">Paradiigma<span>MGR</span></a><nav aria-label="Разделы продукта"><a href="#top">Обзор</a><a href="#agent">ИИ-агент</a><a href="#dynamics">Метрики</a><a href="#competitors">Конкуренты</a><a href="#sources">Исследования</a><a href="#backlog">Бэклог</a><a href="#releases">Релизы</a><a href="#journal">Журнал</a><a href="#productMemory">База знаний</a><a href="#settingsPanel">Настройки</a></nav></header>
-<main id="top"><div class="eyebrow">Аналитика интернет-магазина</div><h1>Обзор релиза</h1><p class="lead" id="release"></p><p id="source" class="source"></p><section id="qwen-release" class="panel" hidden></section>
-<section class="panel"><div class="line"><h2>Самостоятельные заказы</h2><a href="#dynamics">К графику</a></div><p id="period"></p><div id="cards" class="cards"></div><p id="signal" role="status"></p><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></section>
-<section id="dynamics" class="panel"><h2>Динамика индекса</h2><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
-<details><summary>Настроить сравнение</summary><form id="settings"><div class="grid dates"><label>Начало базы<input type="date" name="before_start" required></label><label>Последняя неделя базы<input type="date" name="before_end" required></label><label>Начало после релиза<input type="date" name="after_start" required></label><label>Последняя полная неделя<input type="date" name="after_end" required></label><label>Метрика<select name="metric"><option value="orders_index">Недельный индекс</option><option value="orders_index_4w">Скользящий индекс за 4 недели</option></select></label><label>Порог падения, %<input name="alert_percent" type="number" min="0" max="100" step=".1" required></label></div><button>Пересчитать</button></form></details></section>
-<section id="analysis" class="panel"><h2>Что проверить первым?</h2><button id="toggle" aria-expanded="false" aria-controls="answer">Разобрать падение</button><div id="answer" hidden><h3>Выбор лицензии</h3><p id="reachPeriod"></p><ul id="reach"></ul>
-<h3>Выбор опции и корзина</h3><p>Проверьте, появилась ли лицензия в корзине, и сопоставьте действие с событием в аналитике.</p>
-<ul><li>Лицензия появилась, событие отсутствует — проверить сбор данных вместе с владельцем задачи.</li><li>Лицензия не появилась — воспроизвести ошибку пути покупки. Ошибка передачи события тоже возможна.</li><li>Товар и событие на месте — сверить другие варианты лицензий, устройства и каналы. Причина падения остаётся открытой.</li></ul><p><a href="#t08">Открыть связанную задачу</a></p><button class="draft">Создать задачу проверки</button></div></section>
-<section class="panel" id="sources"><h2>Исследования и источники</h2><p>Найдите фрагменты в демонстрационной подборке или в подключённых локальных материалах.</p><form id="search"><label>Вопрос по релизу<input name="query" required value="Как проверить событие добавления лицензии в корзину?"></label><div class="actions"><button>Найти источники</button><button type="button" id="infer" class="secondary">Предложить гипотезу с ИИ</button></div></form><p id="ai" role="status"></p><div id="hits"></div>
-<div id="agent">
-<h3>Расследование</h3>
-<label><input type="checkbox" id="includeMeter"> Включить Метрику за период из формы ниже</label>
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PARADИИGMA MGR</title>
+<style>/*STYLE*/</style>
+</head>
+<body>
+<a class="skip-link" href="#workspace-content">К содержимому</a>
+<header class="topbar">
+  <button class="mobile-menu icon-button" id="mobileMenu" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Открыть меню"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="brand" href="#overview"><span class="brand-mark"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="4"/><path d="M12 7V4m-4 8h.01m8 0h.01M9 16h6M2 12v3m20-3v3"/></svg></span><span>PARADИИGMA <b>MGR</b></span></a>
+  <div class="topbar-status">
+    <a id="activeInvestigation" class="run-indicator" href="#agent" role="status" hidden></a>
+    <a id="connectionStatus" class="connection-status" href="#settingsPanel" data-state="unknown"><span aria-hidden="true"></span><strong>Проверяем подключение</strong></a>
+  </div>
+</header>
+<div class="app-shell" id="dashboard">
+  <aside class="sidebar" id="sidebar">
+    <button class="sidebar-collapse" id="sidebarToggle" type="button" aria-controls="sidebar" aria-expanded="true"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m7-11-3 3 3 3"/></svg><span>Свернуть меню</span></button>
+    <nav aria-label="Разделы продукта"><div class="nav-group"><button class="nav-group-toggle" type="button" aria-expanded="true" aria-controls="nav-workspace">Рабочее пространство<span aria-hidden="true"></span></button>
+<div class="nav-links" id="nav-workspace"><a href="#overview" data-nav="overview" aria-label="Обзор" title="Обзор"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Обзор</span></a><a href="#agent" data-nav="agent" aria-label="ИИ-агент" title="ИИ-агент"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="4"/><path d="M12 7V4m-4 8h.01m8 0h.01M9 16h6M2 12v3m20-3v3"/></svg><span>ИИ-агент</span></a><a href="#qwen" data-nav="qwen" aria-label="Чат с Qwen" title="Чат с Qwen"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2zM9 8h6m-1 10h3l4 3v-6"/></svg><span>Чат с Qwen</span></a></div></div>
+<div class="nav-group"><button class="nav-group-toggle" type="button" aria-expanded="true" aria-controls="nav-analytics">Аналитика<span aria-hidden="true"></span></button>
+<div class="nav-links" id="nav-analytics"><a href="#dynamics" data-nav="dynamics" aria-label="Метрики" title="Метрики"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18M7 15l4-5 4 3 5-7"/></svg><span>Метрики</span></a><a href="#competitors" data-nav="competitors" aria-label="Конкуренты" title="Конкуренты"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg><span>Конкуренты</span></a><a href="#sources" data-nav="sources" aria-label="Исследования" title="Исследования"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5c-2-2-6-2-9-2v15c3 0 7 0 9 2 2-2 6-2 9-2V3c-3 0-7 0-9 2v15"/></svg><span>Исследования</span></a><a href="#releases" data-nav="releases" aria-label="Релизы" title="Релизы"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 4v11.5m2.5 2.5a9.5 9.5 0 0 0 9.5-9.5"/></svg><span>Релизы</span></a></div></div>
+<div class="nav-group"><button class="nav-group-toggle" type="button" aria-expanded="true" aria-controls="nav-product">Управление продуктом<span aria-hidden="true"></span></button>
+<div class="nav-links" id="nav-product"><a href="#backlog" data-nav="backlog" aria-label="Бэклог" title="Бэклог"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 6 2 2 4-4m4 3h8m-18 7 2 2 4-4m4 3h8m-8 5h8"/></svg><span>Бэклог</span></a><a href="#effect" data-nav="effect" aria-label="Оценка эффекта" title="Оценка эффекта"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg><span>Оценка эффекта</span></a><a href="#productMemory" data-nav="productMemory" aria-label="База знаний" title="База знаний"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13a8 3 0 0 0 16 0v-13M4 12a8 3 0 0 0 16 0"/></svg><span>База знаний</span></a><a href="#journal" data-nav="journal" aria-label="Журнал" title="Журнал"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 5v6h6m3-4v5l4 2"/></svg><span>Журнал</span></a></div></div>
+<div class="nav-group"><button class="nav-group-toggle" type="button" aria-expanded="true" aria-controls="nav-system">Система<span aria-hidden="true"></span></button>
+<div class="nav-links" id="nav-system"><a href="#settingsPanel" data-nav="settingsPanel" aria-label="Настройки" title="Настройки"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Настройки</span></a></div></div>
+</nav>
+  </aside>
+  <button class="nav-scrim" id="navScrim" type="button" aria-label="Закрыть меню" hidden tabindex="-1"></button>
+  <main id="workspace-content" tabindex="-1">
+<section class="workspace" id="overview" data-workspace aria-labelledby="title-overview">
+<div class="workspace-heading"><h1 id="title-overview" tabindex="-1">Обзор продукта</h1><p>Продажи, сигналы и последние расследования в одном месте.</p></div>
+
+<div class="overview-context"><span id="source" class="context-label"></span><span id="release"></span></div>
+<div class="cards overview-kpis" id="cards"></div>
+<div class="overview-layout">
+  <section class="panel order-panel"><div class="line"><h2>Динамика заказов</h2><a class="inline-action" href="#dynamics">К метрикам <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div><p class="muted" id="overviewPeriod"></p><div id="overviewChart"></div><p class="chart-legend" id="overviewLegend"></p></section>
+  <section class="panel signal-panel"><h2>Аномалии</h2><p id="signal" role="status"></p><a class="button-link" id="signalAction" href="#agent">Перейти к расследованию</a><details><summary>Уведомления</summary><button id="notify" class="secondary">Уведомлять о падении при открытом обзоре</button></details></section>
+  <section class="panel"><div class="line"><h2>Последние расследования</h2><a class="inline-action" href="#journal">В журнал <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div><div id="overviewRuns" class="report-list" aria-live="polite"><p>Загрузка журнала…</p></div></section>
+  <section class="panel"><h2>Приоритетные рекомендации</h2><div id="overviewActions"></div><div class="actions quick-actions"><a href="#agent">Новое расследование</a><a href="#qwen">Открыть чат</a></div></section>
+</div>
+</section>
+<section class="workspace" id="agent" data-workspace aria-labelledby="title-agent" hidden>
+<div class="workspace-heading"><h1 id="title-agent" tabindex="-1">ИИ-агент</h1><p>Запускайте расследования, сверяйте доказательства и согласовывайте гипотезы.</p></div>
+<section class="panel"><h2>Новое расследование</h2><form id="search"><label>Вопрос для агента<input name="query" required maxlength="500" value="Как проверить событие добавления лицензии в корзину?"></label><div class="actions"><button type="button" id="infer">Предложить гипотезу с ИИ</button><button class="secondary">Найти источники</button></div></form><p id="ai" role="status"></p><details><summary>Источники и параметры</summary><label><input type="checkbox" id="includeMeter"> Включить Метрику за период из формы в разделе «Метрики»</label>
 <label><input type="checkbox" id="compareMeter"> Сопоставить Метрику по окнам сравнения заказов</label>
 <details id="publicSearch" hidden><summary>Публичные источники конкурентов</summary>
 <label>Продукт<select id="publicProduct"><option value="">-</option></select></label>
 <label>Домены<select id="publicDomains" multiple></select></label>
 <label>Темы<select id="publicTopics" multiple><option value="pricing">Цены</option><option value="licensing">Лицензирование</option><option value="checkout">Покупка</option><option value="product_features">Характеристики</option><option value="support">Поддержка</option></select></label>
-</details>
-<button type="button" class="secondary" id="openInvestigation">Открыть расследование</button>
-<p id="runSummary" role="status"></p>
-<ol id="runPhases" aria-label="Этапы расследования"></ol>
-<details id="settingsPanel"><summary>Настройки и диагностика</summary>
-<p id="analysisDiagnostics">Подключите локальный сервер.</p>
-<button type="button" class="secondary" id="checkNow">Проверить порог</button>
-<p id="checkStatus" role="status"></p>
-</details>
-<div id="runDetails"></div>
-<details id="competitors"><summary>Конкурентные источники</summary><div id="competitorEvidence"><p>Откройте расследование, чтобы проверить источники.</p></div></details>
-<details id="releases"><summary>Релизы в расследовании</summary><div id="releaseEvidence"><p>Откройте расследование, чтобы проверить даты релизов.</p></div></details>
-<details id="journal"><summary>Журнал и задачи</summary>
-<button type="button" class="secondary" id="reloadRuns">Обновить</button>
-<button type="button" class="secondary" id="dailyDigest">Сводка за день</button>
-<p id="digestStatus" role="status"></p>
-<div id="runHistory"></div><div id="serverTasks"></div></details>
-</div><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
-<details><summary>Загрузить материал в локальный поиск</summary><form id="upload"><label>Источник<input name="name" maxlength="120" placeholder="Название интервью или исследования" required></label><label>Категория<select name="kind"><option>Интервью</option><option>Конкуренты</option></select></label><label>Текстовый файл UTF-8<input type="file" id="txt" accept=".txt,text/plain"></label><label>Выбранные абзацы<textarea name="text" required maxlength="30000"></textarea></label><button>Добавить в поиск</button></form></details><div id="t08" class="note"></div></section>
-<section class="panel" id="productMemory">
-<h2>База знаний</h2>
+</details><p><a href="#dynamics">Открыть параметры метрик</a></p></details></section><section class="panel" id="agent-results"><h2>Отчёт расследования</h2><p id="runSummary" role="status">Запустите новое расследование или откройте сохранённый отчёт из журнала.</p>
+<ol id="runPhases" aria-label="Этапы расследования"></ol><div id="runDetails"></div></section><details id="modelExample" hidden><summary>Сохранённый запуск модели</summary><p>Сохранённый ответ на контрольный запрос. Новый запуск доступен с локальной моделью.</p><div id="example"></div></details>
+</section>
+<section class="workspace" id="qwen" data-workspace aria-labelledby="title-qwen" hidden>
+<div class="workspace-heading"><h1 id="title-qwen" tabindex="-1">Чат с Qwen</h1><p>Задавайте вопросы о продукте и возвращайтесь к предыдущим диалогам.</p></div>
+<div id="qwenWorkspace"><section class="panel empty-state" id="qwenUnavailable"><h2>Чат недоступен</h2><p>Чат открывается на серверном стенде с включённой интеграцией Qwen.</p><a href="#settingsPanel">Проверить подключения</a></section></div>
+</section>
+<section class="workspace" id="dynamics" data-workspace aria-labelledby="title-dynamics" hidden>
+<div class="workspace-heading"><h1 id="title-dynamics" tabindex="-1">Метрики</h1><p>Проверяйте динамику заказов и сопоставляйте периоды.</p></div>
+<section class="panel"><h2>Динамика индекса</h2><p id="period" class="muted"></p><p>Пунктир показывает недельные значения, сплошная линия — среднее за четыре недели.</p><div id="chart"></div><p class="muted"><span id="legend"></span> Неделя запуска исключена из сравнения. Неполная неделя выделена на графике.</p><details><summary>Числа по периодам</summary><div class="scroll"><table id="numbers"></table></div></details>
+<details><summary>Настроить сравнение</summary><form id="settings"><div class="grid dates"><label>Начало базы<input type="date" name="before_start" required></label><label>Последняя неделя базы<input type="date" name="before_end" required></label><label>Начало после релиза<input type="date" name="after_start" required></label><label>Последняя полная неделя<input type="date" name="after_end" required></label><label>Метрика<select name="metric"><option value="orders_index">Недельный индекс</option><option value="orders_index_4w">Скользящий индекс за 4 недели</option></select></label><label>Порог падения, %<input name="alert_percent" type="number" min="0" max="100" step=".1" required></label></div><button>Пересчитать</button></form></details></section><section class="panel"><h2>Живая Яндекс.Метрика</h2><p>Визиты из отдельно настроенного счётчика. Индексы заказов рассчитываются по загруженной выгрузке.</p><form id="meter"><div class="grid"><label>С даты<input type="date" required name="start"></label><label>По дату<input type="date" required name="end"></label></div><button>Запросить визиты</button></form><p id="meterResult" role="status"></p></section>
+</section>
+<section class="workspace" id="competitors" data-workspace aria-labelledby="title-competitors" hidden>
+<div class="workspace-heading"><h1 id="title-competitors" tabindex="-1">Конкуренты</h1><p>Сверяйте предложения, цены и источники по выбранным продуктам.</p></div>
+<section class="panel"><h2>Предложения и доказательства</h2><div id="competitorEvidence"><p class="muted">Конкурентные доказательства появятся после открытия расследования.</p></div><div class="actions"><button id="compareOffers" type="button">Исследовать предложения</button><a href="#memoryCompare">Сравнить в базе знаний</a></div></section>
+<section class="panel"><h2>Изменения цен</h2><form id="priceHistory"><label>Продукт <small>(необязательно)</small><input name="product" maxlength="120"></label><div class="grid"><label>С даты<input name="start" type="date" required></label><label>До даты<input name="end" type="date" required></label></div><button>Показать изменения</button></form><div id="priceResults" aria-live="polite"></div></section>
+</section>
+<section class="workspace" id="sources" data-workspace aria-labelledby="title-sources" hidden>
+<div class="workspace-heading"><h1 id="title-sources" tabindex="-1">Исследования</h1><p>Ищите CustDev, интервью и документы в подключённых материалах.</p></div>
+<section class="panel"><h2>Поиск по материалам</h2><form id="researchSearch"><label>Что найти<input name="query" required placeholder="Например, проверка корзины"></label><div class="actions"><button>Найти источники</button><button id="investigateResearch" type="button" class="secondary">Открыть в ИИ-агенте</button></div></form><p id="researchStatus" role="status"></p><div id="hits"></div></section><section class="panel"><h2>Импорт материалов</h2><details><summary>Загрузить материал в локальный поиск</summary><form id="upload"><label>Источник<input name="name" maxlength="120" placeholder="Название интервью или исследования" required></label><label>Категория<select name="kind"><option>Интервью</option><option>Конкуренты</option></select></label><label>Текстовый файл UTF-8<input type="file" id="txt" accept=".txt,text/plain"></label><label>Выбранные абзацы<textarea name="text" required maxlength="30000"></textarea></label><button>Добавить в поиск</button></form></details></section>
+</section>
+<section class="workspace" id="releases" data-workspace aria-labelledby="title-releases" hidden>
+<div class="workspace-heading"><h1 id="title-releases" tabindex="-1">Релизы</h1><p>Смотрите хронологию изменений и связанные задачи.</p></div>
+<section class="panel"><h2>Текущий релиз</h2><p id="releaseContext"></p><div id="t08" class="note"></div></section><section id="qwen-release" class="panel" hidden></section><section class="panel"><h2>Релизы в расследовании</h2><div id="releaseEvidence"><p class="muted">Откройте отчёт, чтобы проверить соблюдение сроков и источники.</p></div><a href="#memoryCompare">Открыть исторические сравнения</a></section>
+<section class="panel"><h2>История релизов</h2><form id="releaseHistory"><label>Продукт<input name="product" required maxlength="120"></label><div class="grid"><label>С даты<input name="start" type="date" required></label><label>До даты<input name="end" type="date" required></label></div><button>Найти релизы</button></form><div id="releaseResults" aria-live="polite"></div></section>
+<section id="analysis" class="panel"><h2>Что проверить первым?</h2><button id="toggle" aria-expanded="false" aria-controls="answer">Разобрать падение</button><div id="answer" hidden><h3>Выбор лицензии</h3><p id="reachPeriod"></p><ul id="reach"></ul>
+<h3>Выбор опции и корзина</h3><p>Проверьте, появилась ли лицензия в корзине, и сопоставьте действие с событием в аналитике.</p>
+<ul><li>Лицензия появилась, событие отсутствует — проверить сбор данных вместе с владельцем задачи.</li><li>Лицензия не появилась — воспроизвести ошибку пути покупки. Ошибка передачи события тоже возможна.</li><li>Товар и событие на месте — сверить другие варианты лицензий, устройства и каналы. Причина падения остаётся открытой.</li></ul><p><a href="#t08">Открыть связанную задачу</a></p><button class="draft">Создать задачу проверки</button></div></section>
+</section>
+<section class="workspace" id="backlog" data-workspace aria-labelledby="title-backlog" hidden>
+<div class="workspace-heading"><h1 id="title-backlog" tabindex="-1">Бэклог</h1><p>Управляйте черновиками и согласованными задачами проверки.</p></div>
+<section class="panel"><div class="line"><h2>Серверные задачи</h2><a href="#agent-results">Предложения из расследования</a></div><div id="serverTasks"><p>Загрузка задач…</p></div></section><section class="panel"><h2>Черновики в браузере</h2><p>Черновики сохраняются на этом устройстве. Согласованные задачи находятся в серверном бэклоге.</p><div id="saved"></div><button class="draft" id="draftBtn">Создать задачу проверки</button>
+<form id="task" hidden><h3>Гипотеза до следующей доработки</h3><label>Название<input name="title" required maxlength="200"></label><label>Гипотеза<textarea name="hypothesis" required></textarea></label><label>Способ проверки<textarea name="steps" required rows="4"></textarea></label><label>Численная цель четырёхнедельного индекса<input type="number" name="target" required min="0.01" step=".01"></label><p id="criterion"></p><p>Тег · сгенерирована ИИ-помощником</p><div class="actions"><button>Сохранить задачу</button><button id="cancel" type="button" class="secondary">Отменить</button></div></form></section>
+</section>
+<section class="workspace" id="effect" data-workspace aria-labelledby="title-effect" hidden>
+<div class="workspace-heading"><h1 id="title-effect" tabindex="-1">Оценка эффекта</h1><p>Фиксируйте критерии успеха и проверяйте результаты после изменений.</p></div>
+<section class="panel"><h2>Результат после исправления</h2><p>Зафиксируйте цель до проверки. Для оценки нужны четыре последовательные полные недели после исправления и динамика второй группы за те же даты.</p><label>Данные для оценки<select id="mode"><option value="actual">Данные после исправления</option><option value="demo">Синтетический тест</option></select></label><p id="effectResult" aria-live="polite">Ожидаем данные после исправления</p>
+<details><summary>Загрузить новые недели</summary><label>JSON с датой исправления и четырьмя неделями<input id="weeksFile" type="file" accept=".json"></label><p>Формат приведён в README. Полученные значения показываются с пометкой источника.</p></details><label>Решение продакта<select id="decision"><option>Продолжить доработку</option><option>Пересмотреть гипотезу</option><option>Отказаться от задачи</option><option>Закрыть после проверки</option></select></label><button id="saveDecision">Зафиксировать решение</button></section>
+</section>
+<section class="workspace" id="productMemory" data-workspace aria-labelledby="title-productMemory" hidden>
+<div class="workspace-heading"><h1 id="title-productMemory" tabindex="-1">База знаний</h1><p>Наблюдения, документы, решения и исторические сравнения.</p></div>
+<section class="panel">
 <label>Режим данных<select id="memoryMode"><option value="local">Рабочие</option><option value="synthetic">Синтетические</option><option value="demo_counter">Тестовый счётчик</option></select></label>
 <div class="actions"><button type="button" id="memoryRefresh">Показать накопленные знания</button>
 <button type="button" id="memoryCollect" class="secondary">Прочитать текущие продажи</button></div>
@@ -60,9 +116,21 @@
 <button type="button" id="memoryTimeline" class="secondary">История выбранного ряда</button></form>
 <div id="memoryResult" aria-live="polite"></div>
 </section>
-<section id="backlog" class="panel"><h2>Демо-бэклог</h2><p>Задачи сохраняются в этом браузере. Трекер Redmine подключается отдельно.</p><div id="saved"></div><button class="draft" id="draftBtn">Создать задачу проверки</button>
-<form id="task" hidden><h3>Гипотеза до следующей доработки</h3><label>Название<input name="title" required maxlength="200"></label><label>Гипотеза<textarea name="hypothesis" required></textarea></label><label>Способ проверки<textarea name="steps" required rows="4"></textarea></label><label>Численная цель четырёхнедельного индекса<input type="number" name="target" required min="0.01" step=".01"></label><p id="criterion"></p><p>Тег · сгенерирована ИИ-помощником</p><div class="actions"><button>Сохранить задачу</button><button id="cancel" type="button" class="secondary">Отменить</button></div></form></section>
-<section id="effect" class="panel"><h2>Результат после исправления</h2><p>Зафиксируйте цель до проверки. Для оценки нужны четыре последовательные полные недели после исправления и динамика второй группы за те же даты.</p><label>Данные для оценки<select id="mode"><option value="actual">Данные после исправления</option><option value="demo">Синтетический тест</option></select></label><p id="effectResult" aria-live="polite">Ожидаем данные после исправления</p>
-<details><summary>Загрузить новые недели</summary><label>JSON с датой исправления и четырьмя неделями<input id="weeksFile" type="file" accept=".json"></label><p>Формат приведён в README. Полученные значения показываются с пометкой источника.</p></details><label>Решение продакта<select id="decision"><option>Продолжить доработку</option><option>Пересмотреть гипотезу</option><option>Отказаться от задачи</option><option>Закрыть после проверки</option></select></label><button id="saveDecision">Зафиксировать решение</button></section>
-<section class="panel"><h2>Живая Яндекс.Метрика</h2><p>Визиты из отдельно настроенного счётчика. Индексы заказов рассчитываются по загруженной выгрузке.</p><form id="meter"><div class="grid"><label>С даты<input type="date" required name="start"></label><label>По дату<input type="date" required name="end"></label></div><button>Запросить визиты</button></form><p id="meterResult" role="status"></p></section><footer>ParadiigmaMGR · <a href="cost.xlsx" download>Скачать калькулятор стоимости</a></footer></main><div id="toast" role="status" hidden></div>
-<script type="application/json" id="boot">/*BOOT*/</script><script>/*SCRIPT*/</script></html>
+</section>
+<section class="workspace" id="journal" data-workspace aria-labelledby="title-journal" hidden>
+<div class="workspace-heading"><h1 id="title-journal" tabindex="-1">Журнал</h1><p>Открывайте сохранённые расследования и сводки мониторинга.</p></div>
+<section class="panel"><div class="line"><h2>История расследований</h2><div class="actions"><button type="button" class="secondary" id="reloadRuns">Обновить</button><button type="button" class="secondary" id="dailyDigest">Сводка за день</button></div></div><p id="digestStatus" role="status"></p><div id="runHistory" class="report-list"><p>Загрузка журнала…</p></div></section>
+</section>
+<section class="workspace" id="settingsPanel" data-workspace aria-labelledby="title-settingsPanel" hidden>
+<div class="workspace-heading"><h1 id="title-settingsPanel" tabindex="-1">Настройки</h1><p>Подключения источников и диагностика рабочего пространства.</p></div>
+<section class="panel"><h2>Подключения</h2><dl id="connectionDetails" class="connection-details"></dl><p id="analysisDiagnostics">Проверяем параметры локального сервера…</p></section><section class="panel"><h2>Диагностика</h2><p>Проверка порога изменения заказов для выбранного периода.</p>
+<button type="button" class="secondary" id="checkNow">Проверить порог</button>
+<p id="checkStatus" role="status"></p><a href="cost.xlsx" download>Скачать калькулятор стоимости</a></section>
+</section>
+  </main>
+</div>
+<div id="toast" role="status" hidden></div>
+<script type="application/json" id="boot">/*BOOT*/</script>
+<script>/*SCRIPT*/</script>
+</body>
+</html>

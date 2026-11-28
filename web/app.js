@@ -33,6 +33,180 @@ const text = (id, t) => {
 };
 const values = (f) => Object.fromEntries(new FormData(f));
 const dateRu = (s) => s.split("-").reverse().join(".");
+const workspaces = new Map([...document.querySelectorAll("[data-workspace]")].map((item) => [item.id, item]));
+const mobileLayout = matchMedia("(max-width: 760px)");
+let visibleWorkspace, reportLink, reportRequest = 0, renderedReportId, returnFromChat = "overview";
+let connectionSettings, lastModelResult;
+let recommendationReport;
+const reportCache = new Map();
+
+function setMobileMenu(open, restoreFocus = false) {
+  $("#dashboard").classList.toggle("mobile-open", open);
+  $("#sidebar").inert = mobileLayout.matches && !open;
+  $("#navScrim").hidden = !open;
+  $("#mobileMenu").setAttribute("aria-expanded", String(open));
+  if (open) {
+    const active = $("#sidebar nav a[aria-current]");
+    (active?.getClientRects().length ? active : $("#sidebarToggle")).focus();
+  }
+  else if (restoreFocus) $("#mobileMenu").focus();
+}
+
+function openTarget(target) {
+  if (!target) return;
+  for (let el = target; el; el = el.parentElement) if (el.tagName === "DETAILS") el.open = true;
+  if (!target.matches("a, button, input, select, textarea, [tabindex]")) target.tabIndex = -1;
+  target.focus({preventScroll: true});
+  target.scrollIntoView({block: "nearest"});
+}
+
+function showWorkspace(id, focus) {
+  const changed = visibleWorkspace !== id;
+  visibleWorkspace = id;
+  for (const [name, section] of workspaces) section.hidden = name !== id;
+  for (const link of document.querySelectorAll("[data-nav]")) {
+    if (link.dataset.nav === id) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  const title = workspaces.get(id).querySelector("h1");
+  document.title = title.textContent + " · PARADИИGMA MGR";
+  if (changed) {
+    setMobileMenu(false);
+    window.scrollTo(0, 0);
+    document.dispatchEvent(new CustomEvent("dashboard-route", {detail: id}));
+  }
+  if (focus) title.focus({preventScroll: true});
+}
+
+function navigate(hash) {
+  const fragment = hash.startsWith("#") ? hash : "#" + hash;
+  if (location.hash !== fragment) history.pushState(null, "", fragment);
+  applyRoute(true);
+}
+
+function applyRoute(focus = false) {
+  let fragment;
+  try { fragment = decodeURIComponent(location.hash.slice(1)); } catch { fragment = ""; }
+  const report = /^report=([0-9a-f]{32})(?:&ref=(evidence-.+))?$/.exec(fragment);
+  const target = document.getElementById(report ? report[2] || "" : fragment);
+  const id = report || fragment.startsWith("evidence-") ? "agent"
+    : fragment.startsWith("qwen-turn-") ? "qwen"
+    : target?.closest("[data-workspace]")?.id || "overview";
+  showWorkspace(id, focus);
+  if (id !== "qwen") returnFromChat = location.hash || id;
+  if (report) {
+    if (reportLink !== report[1]) openLinkedReport(report[1], report[2]);
+    else if (renderedReportId === report[1] && target) openTarget(target);
+  } else {
+    if (target && target !== workspaces.get(id)) openTarget(target);
+    reportLink = null;
+    reportRequest++;
+  }
+}
+
+function setActivity(kind, label) {
+  const activity = $("#activeInvestigation");
+  activity.dataset[kind] = label || "";
+  const states = [activity.dataset.agent, activity.dataset.chat].filter(Boolean);
+  activity.hidden = !states.length;
+  activity.textContent = states.length > 1 ? "Расследование и чат в работе" : states[0] || "";
+  activity.href = activity.dataset.agent ? "#agent" : "#qwen";
+}
+
+function renderConnections() {
+  const badge = $("#connectionStatus");
+  const settings = connectionSettings;
+  const online = settings && !settings.error;
+  const model = !settings ? "Проверяем настройки" : !online ? "Статус подключения неизвестен"
+    : !settings.model_configured ? "Адрес модели не задан"
+    : lastModelResult || "Адрес настроен, ответ ещё не проверен";
+  badge.dataset.state = !settings || !online ? "unknown"
+    : lastModelResult === "Подтверждён ответ Qwen" ? "online" : "configured";
+  badge.querySelector("strong").textContent = !settings ? "Проверяем подключение" : !online ? "Нет данных о подключении"
+    : lastModelResult === "Подтверждён ответ Qwen" ? "Qwen ответила"
+    : !settings.model_configured ? "Локальный режим" : "Qwen настроена";
+  const rows = [["Backend", !settings ? "Проверяем" : online ? "Отвечает" : settings.error],
+    ["Qwen", model],
+    ["Яндекс.Метрика", online ? settings.metrika_configured ? "Настроена" : "Не настроена" : "Статус неизвестен"],
+    ["Публичный поиск", online ? settings.public_domains.length ? "Источники настроены" : "Источники не настроены" : "Статус неизвестен"],
+    ["Мониторинг", online ? settings.monitor_interval ? "Каждые " + settings.monitor_interval + " с" : "Расписание выключено" : "Статус неизвестен"]];
+  $("#connectionDetails").replaceChildren(...rows.flatMap(([label, value]) => [node("dt", label), node("dd", value)]));
+}
+
+function modelResult(status) {
+  if (status === "ok") lastModelResult = "Подтверждён ответ Qwen";
+  if (["unavailable", "invalid_response"].includes(status)) lastModelResult = "Последний отчёт не содержит ответа Qwen";
+  renderConnections();
+}
+
+const chatPanel = $("#qwen-panel");
+if (chatPanel && !offline) {
+  $("#qwenUnavailable").hidden = true;
+  $("#qwenWorkspace").append(chatPanel);
+}
+let menuPrefs = {};
+try { menuPrefs = JSON.parse(localStorage.getItem("paradiigma.sidebar")) || {}; } catch { /* optional preference */ }
+const saveMenu = () => {
+  try { localStorage.setItem("paradiigma.sidebar", JSON.stringify(menuPrefs)); } catch { /* optional preference */ }
+};
+function renderMenu() {
+  const collapsed = !!menuPrefs.collapsed;
+  $("#dashboard").classList.toggle("sidebar-compact", collapsed);
+  $("#sidebarToggle").setAttribute("aria-expanded", String(!collapsed));
+  $("#sidebarToggle").setAttribute("aria-label", collapsed ? "Развернуть меню" : "Свернуть меню");
+  $("#sidebarToggle span").textContent = collapsed ? "Развернуть меню" : "Свернуть меню";
+  for (const button of document.querySelectorAll(".nav-group-toggle")) {
+    const group = button.getAttribute("aria-controls");
+    const open = menuPrefs[group] !== false;
+    button.setAttribute("aria-expanded", String(open));
+    document.getElementById(group).classList.toggle("group-closed", !open);
+  }
+}
+$("#sidebarToggle").onclick = () => { menuPrefs.collapsed = !menuPrefs.collapsed; saveMenu(); renderMenu(); };
+for (const button of document.querySelectorAll(".nav-group-toggle")) button.onclick = () => {
+  const group = button.getAttribute("aria-controls");
+  menuPrefs[group] = menuPrefs[group] === false;
+  saveMenu(); renderMenu();
+};
+$("#mobileMenu").onclick = () => setMobileMenu($("#mobileMenu").getAttribute("aria-expanded") === "false", true);
+$("#navScrim").onclick = () => setMobileMenu(false, true);
+mobileLayout.addEventListener("change", () => setMobileMenu(false));
+document.addEventListener("keydown", (event) => {
+  if (!$("#dashboard").classList.contains("mobile-open")) return;
+  if (event.key === "Escape") {
+    setMobileMenu(false, true);
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const controls = [$("#mobileMenu"), ...$("#sidebar").querySelectorAll("button, a")]
+    .filter((control) => control.getClientRects().length);
+  const index = controls.indexOf(document.activeElement);
+  if (index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
+    event.preventDefault();
+    controls[event.shiftKey ? controls.length - 1 : 0].focus();
+  }
+});
+document.addEventListener("click", (event) => {
+  const link = event.target.closest('a[href^="#"]');
+  if (!link || event.button || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.defaultPrevented) return;
+  const hash = link.getAttribute("href");
+  if (hash === "#workspace-content") return;
+  event.preventDefault();
+  if (mobileLayout.matches && link.dataset.nav) setMobileMenu(false);
+  navigate(hash);
+});
+window.addEventListener("popstate", () => applyRoute());
+window.addEventListener("hashchange", () => applyRoute());
+window.dashboard = {
+  navigate,
+  inChat: () => visibleWorkspace === "qwen",
+  closeChat: () => navigate(returnFromChat),
+  chatActivity: (label) => setActivity("chat", label),
+  modelResult,
+};
+renderMenu();
+setMobileMenu(false);
+renderConnections();
 function flash(t) {
   text("#toast", t);
   $("#toast").hidden = false;
@@ -67,10 +241,11 @@ async function api(route, input) {
   if (!r.ok) throw Error(a.error || "Не удалось выполнить запрос");
   return a;
 }
-function drawChart() {
+function drawChart(container) {
   const ns = "http://www.w3.org/2000/svg",
     svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", "0 0 940 285");
+  const width = mobileLayout.matches ? 500 : 940;
+  svg.setAttribute("viewBox", "0 0 " + width + " 285");
   svg.setAttribute("role", "img");
   svg.setAttribute(
     "aria-label",
@@ -84,7 +259,7 @@ function drawChart() {
   }
   const all = data.series.flatMap((s) => s.points);
   if (new Set(all.map((point) => point[0])).size < 2) {
-    $("#chart").replaceChildren(node("p", "Недостаточно недель для графика."));
+    container.replaceChildren(node("p", "Недостаточно недель для графика."));
     return;
   }
   const max = Math.max(
@@ -96,7 +271,7 @@ function drawChart() {
   const stamps = all.map((p) => Date.parse(p[0])),
     first = Math.min(...stamps),
     last = Math.max(...stamps);
-  const x = (d) => 46 + (862 * (Date.parse(d) - first)) / (last - first),
+  const x = (d) => 46 + ((width - 78) * (Date.parse(d) - first)) / (last - first),
     y = (v) => 224 - (176 * v) / max;
   add("rect", {
     x: x(data.config.partial_week) - 4,
@@ -106,7 +281,7 @@ function drawChart() {
     fill: "#f8e6ba",
   });
   for (let v = 0; v <= max; v += max / 5) {
-    add("line", { x1: 46, x2: 918, y1: y(v), y2: y(v), stroke: "#dae4de" });
+    add("line", { x1: 46, x2: width - 22, y1: y(v), y2: y(v), stroke: "#dae4de" });
     add(
       "text",
       { x: 3, y: y(v) + 4, fill: "#456", "font-size": 14 },
@@ -148,7 +323,7 @@ function drawChart() {
       add("path", {
         d,
         fill: "none",
-        stroke: i ? "#a4521e" : "#00678a",
+        stroke: i ? "#078477" : "#375891",
         "stroke-width": k === 1 ? 1.6 : 3,
         "stroke-dasharray": k === 1 ? "5 4" : "none",
       });
@@ -169,8 +344,12 @@ function drawChart() {
         dateRu(d).slice(0, 5),
       );
   });
-  $("#chart").replaceChildren(svg);
+  container.replaceChildren(svg);
 }
+mobileLayout.addEventListener("change", () => {
+  drawChart($("#chart"));
+  drawChart($("#overviewChart"));
+});
 function render() {
   const c = data.config,
     dates =
@@ -183,9 +362,11 @@ function render() {
       dateRu(c.after_end);
   text("#source", data.source + " · недельные индексы");
   text("#release", [data.release_id, "Запуск " + dateRu(data.launch)].filter(Boolean).join(" · "));
+  text("#releaseContext", $("#release").textContent);
+  text("#overviewPeriod", dates);
   const comparison = data.series[1]?.name;
   text("#legend", "Синий — " + data.series[0].name +
-    (comparison ? ", оранжевый — " + comparison + "." : ". Контрольной группы нет."));
+    (comparison ? ", бирюзовый — " + comparison + "." : ". Контрольной группы нет."));
   text(
     "#period",
     (c.metric === "orders_index"
@@ -199,9 +380,13 @@ function render() {
   cards.replaceChildren();
   const table = $("#numbers");
   table.replaceChildren();
-  const row = (cells) => {
+  const row = (cells, heading = false) => {
     const tr = node("tr", "");
-    for (const v of cells) tr.append(node("td", v));
+    for (const v of cells) {
+      const cell = node(heading ? "th" : "td", v);
+      if (heading) cell.scope = "col";
+      tr.append(cell);
+    }
     table.append(tr);
   };
   row([
@@ -211,11 +396,13 @@ function render() {
     "Изменение",
     "До " + dateRu(c.partial_week),
     "Изменение",
-  ]);
+  ], true);
   for (const s of data.series) {
     const a = node("a", s.name);
     a.href = "#dynamics";
-    a.append(node("strong", pct(s.delta)));
+    a.className = "kpi";
+    a.append(node("strong", pct(s.delta)), node("small", "Изменение индекса заказов"));
+    if (s.delta < -c.alert_percent || s.delta < 0 && s.delta === -c.alert_percent) a.classList.add("kpi-alert");
     cards.append(a);
     row([
       s.name,
@@ -227,6 +414,14 @@ function render() {
     ]);
   }
   const delta = data.series[0].delta;
+  const alert = delta != null && delta < 0 && -delta >= c.alert_percent;
+  const signalCard = node("a", "Сигналы");
+  signalCard.className = alert ? "kpi kpi-signal" : "kpi";
+  signalCard.href = "#signal";
+  signalCard.append(node("strong", delta == null ? "—" : alert ? "1" : "0"), node("small", "Порог изменения заказов"));
+  cards.append(signalCard);
+  $("#signal").closest(".panel").classList.toggle("has-signal", alert);
+  if (!$("#overviewActions").children.length) $("#overviewActions").append(node("p", "Рекомендации появятся после открытия расследования."));
   text(
     "#signal",
     delta == null ? "Недостаточно данных для проверки порога." :
@@ -280,7 +475,9 @@ function render() {
   );
   const f = $("#settings");
   for (const e of f.elements) if (e.name) e.value = c[e.name];
-  drawChart();
+  drawChart($("#chart"));
+  drawChart($("#overviewChart"));
+  text("#overviewLegend", $("#legend").textContent);
   sendSignal();
 }
 function showHits(hits) {
@@ -344,14 +541,15 @@ function edit() {
   f.elements.steps.value =
     r?.steps ||
     "Записать устройство, вариант, время и наличие лицензии в корзине. Сверить действие с событием и связанной задачей.";
-  f.elements.target.value = r?.target || data.series[0].rolling_base.toFixed(2);
+  f.elements.target.value = r?.target ?? data.series[0].rolling_base?.toFixed(2) ?? "";
   text(
     "#criterion",
     "Исходная база сравнения и окно после релиза: " +
       (r?.period || period(data.config)) +
       ". По умолчанию цель равна среднему четырёхнедельному индексу по базовым неделям. Подтвердите значение до исправления.",
   );
-  f.scrollIntoView();
+  navigate("backlog");
+  openTarget(f);
   f.elements.title.focus();
 }
 document.querySelectorAll(".draft").forEach((b) => (b.onclick = edit));
@@ -421,7 +619,7 @@ $("#settings").onsubmit = async (e) => {
     flash(err.message);
   }
 };
-$("#search").onsubmit = async (e) => {
+async function findSources(e) {
   e.preventDefault();
   const query = e.currentTarget.elements.query.value;
   try {
@@ -438,10 +636,22 @@ $("#search").onsubmit = async (e) => {
         )
       : (await api("search", { query })).hits;
     showHits(hits);
-    text("#ai", "Результаты поиска · " + hits.length);
+    text("#researchStatus", "Найдено источников: " + hits.length);
+    if (e.target.id === "search" && visibleWorkspace === "agent") navigate("sources");
   } catch (err) {
     flash(err.message);
   }
+}
+$("#search").onsubmit = findSources;
+$("#researchSearch").onsubmit = findSources;
+$("#investigateResearch").onclick = () => {
+  const query = $("#researchSearch").elements.query.value.trim();
+  if (query && !$("#infer").disabled) $("#search").elements.query.value = query;
+  navigate("agent");
+};
+$("#compareOffers").onclick = () => {
+  if (!$("#infer").disabled) $("#search").elements.query.value = "Сравни предложения и источники конкурентов";
+  navigate("agent");
 };
 let pendingMemoryScope = null;
 
@@ -461,6 +671,7 @@ async function runWithProgress(input) {
     $("#runPhases").replaceChildren(...events.map((event) =>
       node("li", (names[event.tool] || names[event.step] || event.tool) +
       " · " + (statuses[event.status] || event.status))));
+    if (events.length) setActivity("agent", names[events.at(-1).tool] || names[events.at(-1).step] || "Идёт расследование");
     if (result.status === "ready") return api("analysis/report", {run_id: result.run_id});
     if (result.status === "failed") throw Error(result.message || "Расследование завершилось с ошибкой. Проверьте настройки и источники.");
     await new Promise((resolve) => setTimeout(resolve, 650));
@@ -470,9 +681,13 @@ async function runWithProgress(input) {
 
 $("#infer").onclick = async (e) => {
   e.target.disabled = true;
+  setActivity("agent", "Идёт расследование");
   const ai = $("#ai");
   ai.textContent = "Идёт подбор источников и проверок…";
   try {
+    history.replaceState(null, "", "#agent");
+    reportLink = null;
+    reportRequest++;
     renderInvestigation(null);
     const request = {
       query: $("#search").elements.query.value,
@@ -492,7 +707,14 @@ $("#infer").onclick = async (e) => {
     }
     $("#runPhases").replaceChildren();
     const res = await runWithProgress(request);
-    renderInvestigation(res);
+    reportCache.set(res.run_id, res);
+    if (!reportLink && (!renderedReportId || visibleWorkspace === "agent")) renderInvestigation(res);
+    modelResult(res.llm_status);
+    if (visibleWorkspace === "agent" && !reportLink) {
+      history.replaceState(null, "", "#report=" + res.run_id);
+      reportLink = res.run_id;
+    }
+    reloadRuns();
     showHits(res.hits);
     proposal = res.hypothesis || res.proposal || "";
     proof = res.refs || [];
@@ -507,7 +729,7 @@ $("#infer").onclick = async (e) => {
       .join(" · ");
     for (const id of proof) {
       const link = node("a", " [" + id + "]");
-      link.href = "#evidence-" + encodeURIComponent(id);
+      link.href = "#report=" + res.run_id + "&ref=evidence-" + encodeURIComponent(id);
       ai.append(link);
     }
   } catch (err) {
@@ -515,6 +737,7 @@ $("#infer").onclick = async (e) => {
     text("#runSummary", "Расследование не завершено.");
   } finally {
     e.target.disabled = false;
+    setActivity("agent", "");
   }
 };
 function renderInvestigation(report) {
@@ -523,22 +746,27 @@ function renderInvestigation(report) {
   const container = $("#runDetails");
   container.replaceChildren();
   text("#runSummary", report ? report.summary : "Собираем доказательства…");
+  renderedReportId = report?.run_id;
   if (!report) return;
+  const recommendations = report.recommended_actions || [];
+  if (!recommendationReport) renderOverviewRecommendations(report);
   const competitorList = $("#competitorEvidence"), releaseList = $("#releaseEvidence");
   const comparisons = report.evidence.filter((item) => ["competitor_local", "competitor_web"].includes(item.kind));
   const releases = report.evidence.filter((item) => item.kind === "release");
   competitorList.replaceChildren(...(comparisons.length
     ? comparisons.map((item) => evidenceLinks(item.ref + " · " + item.quality + " · " +
-      (item.freshness === "recent" ? "свежий источник" : "актуальность требует проверки"), [item.id]))
+      (item.freshness === "recent" ? "свежий источник" : "актуальность требует проверки") +
+      (item.offer?.price != null ? " · " + item.offer.price + " " + (item.offer.currency || "") : ""), [item.id]))
     : [node("p", "Подходящих конкурентных материалов в отчёте нет.")]));
   releaseList.replaceChildren(...(releases.length
     ? releases.map((item) => evidenceLinks(item.ref + " · " + (item.observed_at || "дата неизвестна"), [item.id]))
     : [node("p", "Релизы в отчёте отсутствуют.")]));
   const status = { ok: "доступен", partial: "частично", disabled: "выключен",
     missing: "нет данных", unavailable: "недоступен", error: "ошибка", not_checked: "ещё не проверен" };
-  const section = (heading) => {
-    const block = node("section", "");
-    block.append(node("h4", heading));
+  const section = (heading, open = false) => {
+    const block = node("details", "");
+    block.open = open;
+    block.append(node("summary", heading));
     container.append(block);
     return block;
   };
@@ -566,7 +794,7 @@ function renderInvestigation(report) {
   }
   const findings = section("Наблюдения");
   for (const item of report.findings) findings.append(evidenceLinks(item.text, item.evidence_ids));
-  const hypotheses = section(report.llm_status === "ok" ? "Гипотезы Qwen" : "Гипотезы по правилам");
+  const hypotheses = section(report.llm_status === "ok" ? "Гипотезы Qwen" : "Гипотезы по правилам", true);
   for (const item of report.hypotheses) {
     const row = evidenceLinks(item.problem + " · " + item.cause, item.evidence_ids);
     row.append(node("p", "Проверка до разработки · " + item.verify));
@@ -604,15 +832,26 @@ function renderInvestigation(report) {
     const again = node("button", "Повторить с текущими данными");
     again.onclick = async () => {
       again.disabled = true;
-      try { renderInvestigation(await api("analysis/reopen", { run_id: report.run_id })); }
+      try {
+        const refreshed = await api("analysis/reopen", {run_id: report.run_id});
+        reportCache.set(refreshed.run_id, refreshed);
+        modelResult(refreshed.llm_status);
+        reloadRuns();
+        if (visibleWorkspace === "agent" && renderedReportId === report.run_id) navigate("report=" + refreshed.run_id);
+        else flash("Новое расследование сохранено в журнале.");
+      }
       catch (error) { flash(error.message); }
       finally { again.disabled = false; }
     };
     container.append(again);
   }
   if (report.proposed_tasks.length) {
-    const tasks = section("Предложения в бэклог");
+    const tasks = section("Предложения в бэклог", true);
     for (const item of report.proposed_tasks) tasks.append(proposalForm(report, item));
+  }
+  if (recommendations.length) {
+    const actions = section("Рекомендации", true);
+    actions.append(...recommendations.map((item) => node("p", item)));
   }
   const evidence = section("Доказательства");
   for (const item of report.evidence) {
@@ -642,7 +881,7 @@ function evidenceLinks(label, ids) {
   item.append(node("p", label));
   for (const id of ids) {
     const link = node("a", " [" + id + "] ");
-    link.href = "#evidence-" + encodeURIComponent(id);
+    link.href = "#report=" + renderedReportId + "&ref=evidence-" + encodeURIComponent(id);
     item.append(link);
   }
   return item;
@@ -734,11 +973,24 @@ function effectReviewText(review) {
   return details.filter(Boolean).join(" · ");
 }
 
+function renderOverviewRecommendations(report) {
+  recommendationReport = report.run_id;
+  const recommendations = (report.recommended_actions || []).slice(0, 3);
+  const list = node("ol", "");
+  if (recommendations.length) list.append(...recommendations.map((item) => node("li", item)));
+  const link = node("a", "Открыть отчёт");
+  link.href = "#report=" + report.run_id;
+  $("#overviewActions").replaceChildren(recommendations.length ? list : node("p", "В последнем отчёте нет приоритетных рекомендаций."), link);
+}
+
 async function reloadRuns() {
   try {
     const [journal, backlog] = await Promise.all([api("analysis/journal", {}), api("tasks", {})]);
     const history = $("#runHistory"), tasks = $("#serverTasks");
-    history.replaceChildren(node("h4", "Последние расследования"));
+    const overview = $("#overviewRuns");
+    history.replaceChildren();
+    overview.replaceChildren();
+    if (!journal.runs.length) overview.append(node("p", "Пока нет сохранённых расследований."));
     const emailStatuses = {
       disabled: "отключена", configuration_error: "проверьте настройки",
       blocked_test_mode: "доступна только для синтетических данных", pending: "в очереди",
@@ -750,23 +1002,34 @@ async function reloadRuns() {
       const mail = emailStatuses[item.email_status];
       const alert = node("p", "Сигнал мониторинга · " + item.created.slice(0, 10) +
         (mail ? " · почта " + mail : ""));
-      const link = node("button", "Отчёт по сигналу");
-      link.onclick = async () => {
-        try { renderInvestigation(await api("analysis/report", { run_id: item.run_id })); }
-        catch (error) { flash(error.message); }
-      };
+      const link = node("a", "Отчёт по сигналу");
+      link.href = "#report=" + item.run_id;
       alert.append(link);
       history.append(alert);
     }
-    for (const item of journal.runs) {
-      const button = node("button", item.created.replace("T", " ").slice(0, 19) + " UTC · " + item.llm_status);
-      button.onclick = async () => {
-        try { renderInvestigation(await api("analysis/report", { run_id: item.run_id })); }
-        catch (error) { flash(error.message); }
-      };
-      history.append(button);
+    for (const [index, item] of journal.runs.entries()) {
+      const label = item.summary || "Расследование от " + item.created.slice(0, 10);
+      const link = node("a", label);
+      link.className = "report-row";
+      link.href = "#report=" + item.run_id;
+      link.append(node("small", item.created.replace("T", " ").slice(0, 16) + " UTC"));
+      history.append(link);
+      if (index < 3) overview.append(link.cloneNode(true));
     }
-    tasks.replaceChildren(node("h4", "Локальный бэклог"));
+    if (!history.children.length) history.append(node("p", "Пока нет сохранённых расследований."));
+    const latest = journal.runs[0]?.run_id;
+    if (latest && latest !== recommendationReport) {
+      const current = recommendationReport;
+      const load = reportCache.has(latest) ? Promise.resolve(reportCache.get(latest)) : api("analysis/report", {run_id: latest});
+      load.then((report) => {
+        reportCache.set(latest, report);
+        if (recommendationReport === current) renderOverviewRecommendations(report);
+      }).catch(() => {
+        if (!recommendationReport) text("#overviewActions", "Не удалось загрузить рекомендации из последнего отчёта.");
+      });
+    }
+    tasks.replaceChildren();
+    if (!backlog.tasks.length) tasks.append(node("p", "Пока нет согласованных или отклонённых предложений."));
     for (const item of backlog.tasks) {
       const row = node("article", "");
       row.append(node("p", [item.title, item.decision === "accept" ? "согласована" : "отклонена",
@@ -792,7 +1055,23 @@ async function reloadRuns() {
           } catch (error) { status.textContent = error.message; }
         };
         if (item.latest_review) status.textContent = effectReviewText(item.latest_review);
-        row.append(label, status);
+        const exportButton = node("button", "Экспорт Redmine");
+        exportButton.type = "button";
+        exportButton.className = "secondary";
+        exportButton.onclick = async () => {
+          exportButton.disabled = true;
+          try {
+            const payload = await api("tasks/redmine-export", {task_id: item.id});
+            const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"}));
+            const link = node("a", "");
+            link.href = url;
+            link.download = "redmine-task.json";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch (error) { flash(error.message); }
+          finally { exportButton.disabled = false; }
+        };
+        row.append(label, status, exportButton);
       }
       if (window.qwenAskWithScope && item.decision === "accept") {
         const ask = node("button", "Обсудить эффект в чате");
@@ -803,12 +1082,10 @@ async function reloadRuns() {
     }
   } catch (error) {
     text("#runHistory", error.message);
+    text("#overviewRuns", "Журнал недоступен. Попробуйте обновить его.");
+    text("#serverTasks", error.message);
   }
 }
-$("#openInvestigation").onclick = () => {
-  $("#search").elements.query.focus();
-  $("#infer").click();
-};
 $("#reloadRuns").onclick = reloadRuns;
 $("#dailyDigest").onclick = async () => {
   try {
@@ -832,6 +1109,8 @@ $("#checkNow").onclick = async () => {
   }
 };
 if (!offline) api("analysis/settings", {}).then((settings) => {
+  connectionSettings = settings;
+  renderConnections();
   text("#analysisDiagnostics", [
     settings.model_configured ? "Адрес модели настроен" : "Адрес модели не задан",
     settings.metrika_configured ? "Параметры Метрики заданы" : "Метрика не настроена",
@@ -842,7 +1121,12 @@ if (!offline) api("analysis/settings", {}).then((settings) => {
     for (const value of settings.public_products) $("#publicProduct").append(node("option", value));
     for (const value of settings.public_domains) $("#publicDomains").append(node("option", value));
   }
-}).catch(() => {});
+}).catch((error) => { connectionSettings = {error: error.message}; renderConnections(); });
+else {
+  connectionSettings = {error: "Открыт сохранённый HTML-отчёт"};
+  renderConnections();
+  text("#analysisDiagnostics", "Запустите локальный сервер, чтобы проверить подключения.");
+}
 $("#txt").onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -1126,13 +1410,8 @@ function showMemoryResults(container, result) {
   for (const item of result.decisions) {
     const record = node("p", [item.created.slice(0, 10), item.question, item.decision,
       item.decision_reason, item.effect].filter(Boolean).join(" · "));
-    const open = node("button", "Открыть расследование");
-    open.onclick = async () => {
-      try {
-        renderInvestigation(await api("analysis/report", {run_id: item.run_id}));
-        $("#agent").scrollIntoView();
-      } catch (error) { flash(error.message); }
-    };
+    const open = node("a", "Открыть расследование");
+    open.href = "#report=" + item.run_id;
     record.append(open);
     container.append(record);
   }
@@ -1158,9 +1437,10 @@ $("#memoryAsk").onclick = () => {
   const form = $("#memoryCompare");
   if (!form.reportValidity()) return;
   const options = memoryComparison();
+  if ($("#infer").disabled) { navigate("agent"); return; }
   pendingMemoryScope = {mode: options.mode, compare: options};
   $("#search").elements.query.value = "Сравни выбранные исторические периоды";
-  $("#agent").scrollIntoView();
+  navigate("agent");
   $("#infer").click();
 };
 $("#memoryChat").onclick = () => {
@@ -1216,17 +1496,41 @@ window.qwenCore = {
   },
 };
 document.addEventListener("qwen-backlog-updated", () => $("#reloadRuns").click());
+function showPriceChanges(container, rows) {
+  container.replaceChildren(...(rows.length ? rows.map((row) =>
+    node("p", [row.observed, row.product, row.competitor, row.before + " → " + row.after + " " + row.currency,
+      row.terms, row.reference].filter(Boolean).join(" · "))) :
+    [node("p", "Сопоставимых изменений цен в этом окне нет.")]));
+}
 $("#memoryCompetitors").onclick = async () => {
   try {
     const input = memoryComparison();
-    const result = await api("memory/competitors", {mode: input.mode, period: input.after});
-    $("#memoryResult").replaceChildren(...(result.length ? result.map((row) =>
-      node("p", [row.observed, row.competitor, row.before + " → " + row.after + " " + row.currency,
-        row.terms, row.reference].filter(Boolean).join(" · "))) :
-      [node("p", "Сопоставимых изменений цен в этом окне нет.")]));
+    showPriceChanges($("#memoryResult"), await api("memory/competitors", {mode: input.mode, period: input.after}));
   } catch (error) { text("#memoryResult", error.message); }
 };
 
+for (const workspace of ["priceHistory", "releaseHistory"]) {
+  const form = document.getElementById(workspace);
+  form.elements.start.value = data.config.before_start;
+  form.elements.end.value = data.config.after_end;
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const prices = workspace === "priceHistory";
+    const output = $(prices ? "#priceResults" : "#releaseResults");
+    const {product, start, end} = values(form);
+    const input = {mode: memoryMode(), period: [start, end], ...(product.trim() ? {product: product.trim()} : {})};
+    output.textContent = "Читаем базу знаний…";
+    try {
+      if (prices) showPriceChanges(output, await api("memory/competitors", input));
+      else {
+        const result = await api("memory/product", input);
+        const items = result.releases.map((row) =>
+          node("p", [row.date, row.id, row.metadata?.title, row.metadata?.task_id].filter(Boolean).join(" · ")));
+        output.replaceChildren(...(items.length ? items : [node("p", "За этот период релизы не найдены.")]));
+      }
+    } catch (error) { output.textContent = error.message; }
+  };
+}
 
 $("#memoryTimeline").onclick = async () => {
   try {
@@ -1240,13 +1544,33 @@ $("#memoryTimeline").onclick = async () => {
   } catch (error) { text("#memoryResult", error.message); }
 };
 
-async function openLinkedReport() {
-  const match = /^#report=([0-9a-f]{32})$/.exec(location.hash);
-  if (offline || !match) return;
+async function openLinkedReport(id, ref) {
+  reportLink = id;
+  const request = ++reportRequest;
+  if (renderedReportId === id) {
+    if (ref) openTarget(document.getElementById(ref));
+    return;
+  }
+  if (offline) { flash("Откройте отчёт через локальный сервер."); return; }
+  text("#runSummary", "Загрузка сохранённого отчёта…");
   try {
-    renderInvestigation(await api("analysis/report", {run_id: match[1]}));
-    $("#agent").scrollIntoView();
-  } catch (error) { flash(error.message); }
+    const result = reportCache.get(id) || await api("analysis/report", {run_id: id});
+    if (request !== reportRequest) return;
+    reportCache.set(id, result);
+    renderInvestigation(result);
+    const currentRef = new URLSearchParams(location.hash.slice(1)).get("ref");
+    if (currentRef) openTarget(document.getElementById(currentRef));
+  } catch (error) {
+    if (request !== reportRequest) return;
+    $("#runDetails").replaceChildren();
+    renderedReportId = null;
+    text("#runSummary", error.message);
+    reportLink = null;
+  }
 }
-window.addEventListener("hashchange", openLinkedReport);
-openLinkedReport();
+applyRoute();
+if (offline) {
+  text("#overviewRuns", "Журнал доступен на локальном сервере.");
+  text("#runHistory", "Журнал доступен на локальном сервере.");
+  text("#serverTasks", "Серверный бэклог доступен на локальном сервере.");
+} else reloadRuns();

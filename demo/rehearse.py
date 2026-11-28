@@ -176,7 +176,7 @@ def exercise(run, site, smtp):
         assert task["effect_plan"]["observation_weeks"] == 4 and task["effect_plan"]["target"] == 110
         draft.screenshot(path=run / "approval.png")
         page.locator("#qwen-close").click()
-        page.locator("#journal summary").click()
+        page.locator("[data-nav=journal]").click()
         expect(page.locator("#runHistory")).to_contain_text("почта принято SMTP")
         export = post(browser, site, "tasks/redmine-export", {"task_id": task["id"]})
         assert export["tag"] == ai_store.TASK_TAG
@@ -190,6 +190,7 @@ def exercise(run, site, smtp):
 def show_simulation(run, page):
     from playwright.sync_api import expect
 
+    page.locator("[data-nav=backlog]").click()
     row = page.locator("#serverTasks article").filter(has_text=TITLE)
     expect(row).to_contain_text(ai_store.TASK_TAG)
     with page.expect_response(lambda item: item.url.endswith("/api/tasks/review")) as review:
@@ -216,6 +217,7 @@ def complete_history(run, site, browser, page, dialog):
     plan = post(browser, site, "qwen/turn", {"dialog_id": dialog, "position": 2})
     assert previous["llm_status"] == "ok" and plan["previous_position"] == 1
     assert plan["effect_plan"] == previous["effect_plan"] and not plan["usage"]
+    page.locator("[data-nav=productMemory]").click()
     page.locator("#memoryMode").select_option("synthetic")
     compare = page.locator("#memoryCompare")
     selected = history.series_index("synthetic", product=PRODUCT)[0]
@@ -275,7 +277,7 @@ def finish_rehearsal(run, site):
             dialog = page.locator("#qwen-dialogs").input_value()
             page.locator("#qwen-close").click()
             if not (run / "backlog-effect.png").is_file():
-                page.locator("#journal summary").click()
+                page.locator("[data-nav=journal]").click()
                 page.locator("#reloadRuns").click()
                 show_simulation(run, page)
             complete_history(run, site, browser, page, dialog)

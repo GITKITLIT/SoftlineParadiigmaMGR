@@ -41,3 +41,28 @@
 #qwen-panel details p { white-space: pre-wrap; }
 #qwen-question { resize: vertical; max-height: 9rem; }
 #qwen-release { margin: 1rem 0; }
+
+#qwenWorkspace #qwen-panel {
+  position: static;
+  width: 100%;
+  min-height: min(36rem, 65vh);
+  max-height: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 2px 5px #193d4706;
+  padding: clamp(.95rem, 2vw, 1.4rem);
+}
+#qwenWorkspace #qwen-log {
+  flex: 1 1 auto;
+  min-height: 12rem;
+  max-height: 62dvh;
+  background: #f6f9fa;
+  border-radius: 8px;
+  padding: .65rem;
+}
+#qwenWorkspace #qwen-log:empty::before { content: "Начните с вопроса о продукте или выберите диалог."; color: var(--muted); }
+#qwenWorkspace #qwen-progress:empty { display: none; }
+#qwenWorkspace #qwen-ask { padding-top: .5rem; border-top: 1px solid var(--line); }
+#qwen-fab { box-shadow: 0 3px 11px #173e4a35; }
+@media (max-width: 450px) { #qwenWorkspace .qwen-bar { flex-wrap: wrap; } }
+#qwen-fab { padding: 0; margin: 0; }
