@@ -12,6 +12,12 @@ map "$request_method|$http_origin" $pm_origin_ok {
     "POST|https://@DOMAIN@" 1;
 }
 
+# Canonicalize only navigation GETs to the literal homepage.
+map "$request_method:$request_uri" $pm_redirect_home {
+    default 0;
+    ~^GET:/[?].+ 1;
+}
+
 limit_req_zone $binary_remote_addr zone=pm_rate:1m rate=6r/s;
 limit_conn_zone $binary_remote_addr zone=pm_clients:1m;
 limit_conn_zone $server_name zone=pm_total:1m;
@@ -47,6 +53,7 @@ server {
 
     if ($pm_host_ok = 0) { return 403; }
     if ($pm_origin_ok = 0) { return 403; }
+    if ($pm_redirect_home) { return 302 https://@DOMAIN@/; }
     if ($is_args) { return 400; }
 
     client_max_body_size 150000;

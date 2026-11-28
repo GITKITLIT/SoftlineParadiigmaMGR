@@ -39,6 +39,17 @@ class ProxyConfigTests(unittest.TestCase):
         self.assertIn("location = /api/import", render("pm.test", "demo"))
         self.assertNotIn("location = /api/import", render("pm.test", "production"))
 
+    def test_homepage_redirect_is_scoped_and_keeps_request_guards(self):
+        for mode in ("demo", "production"):
+            with self.subTest(mode=mode):
+                config = render("pm.test", mode)
+                self.assertIn('map "$request_method:$request_uri" $pm_redirect_home {', config)
+                self.assertIn("~^GET:/[?].+ 1;", config)
+                guards = ("if ($pm_host_ok", "if ($pm_origin_ok",
+                          "if ($pm_redirect_home) { return 302 https://pm.test/; }", "if ($is_args)")
+                positions = [config.index(guard) for guard in guards]
+                self.assertEqual(positions, sorted(positions))
+
     def test_qwen_page_has_one_executable_script_pinned_by_proxy(self):
         with patch.dict(os.environ, {}, clear=True):
             html = app.page(qwen_chat=True)
@@ -145,20 +156,29 @@ class ProxyHTTPTests(unittest.TestCase):
 
             context = ssl.create_default_context(cafile=str(work / "cert"))
             auth = "Basic " + base64.b64encode(f"reviewer:{password}".encode()).decode()
-            def request(method="GET", path="/", body=None, **headers):
+            def request(method="GET", path="/", body=None, *, show_location=False, **headers):
                 client = http.client.HTTPSConnection("pm.test", context=context, timeout=5)
                 client._create_connection = lambda *a, **kw: socket.create_connection(("127.0.0.1", port))
                 try:
                     client.request(method, path, body, {"Host": "pm.test", **headers})
                     response = client.getresponse()
-                    return response.status, response.read()
+                    content = response.read()
+                    if show_location:
+                        return response.status, response.getheader("Location")
+                    return response.status, content
                 finally:
                     client.close()
 
             self.assertEqual(request()[0], 401)
             self.assertEqual(request(Authorization=auth, Host="unapproved.test")[0], 403)
             self.assertEqual(request(Authorization=auth, Origin="https://unapproved.test")[0], 403)
-            self.assertEqual(request(path="/?test=hidden", Authorization=auth)[0], 400)
+            home = "/?utm_source=test&next=https://unapproved.test/"
+            for extra in ({}, {"Authorization": auth}):
+                self.assertEqual(request(path=home, show_location=True, **extra), (302, "https://pm.test/"))
+            self.assertEqual(request(path=home, Host="unapproved.test")[0], 403)
+            self.assertEqual(request(path=home, Origin="https://unapproved.test")[0], 403)
+            self.assertEqual(request(path="/api/analysis/settings?test=hidden")[0], 400)
+            self.assertEqual(request("POST", home, "{}", Origin="https://pm.test")[0], 400)
             self.assertEqual(len(captured), 0)
             self.assertEqual(request(Authorization=auth)[0], 200)
             headers = {"Authorization": auth, "Content-Type": "application/json"}

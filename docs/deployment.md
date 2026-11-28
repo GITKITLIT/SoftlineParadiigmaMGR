@@ -27,3 +27,9 @@ sudo bash scripts/deploy/update.sh "$APPROVED_SHA"
 python scripts/pim_backup.py verify --snapshot "$SNAPSHOT"
 python scripts/pim_backup.py restore-test --snapshot "$SNAPSHOT" --output "$NEW_DIRECTORY"
 ```
+
+## HTTPS и проверка интеграций
+
+GET главной страницы с query string перенаправляется кодом 302 на чистый HTTPS-адрес того же хоста. На чистом адресе действует Basic Auth. Запросы к API с query string получают 400. При смене шаблона проверьте редирект без авторизации, вход на чистый адрес и отклонение неверных Host и Origin.
+
+Приёмка Метрики сверяет статус, период, источник и значения адаптера с ответом API. Для SMTP ответ реле 250 подтверждает приём письма. Доставку нужно подтвердить отдельно в целевом ящике.
