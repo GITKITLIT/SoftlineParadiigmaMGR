@@ -1,9 +1,0 @@
---- a/docs/final_release_operator.md
-+++ b/docs/final_release_operator.md
-@@ -51,5 +51,5 @@
- ```sh
- umask 077
--mkdir -p "$SEARCH_STATE" "$PIM_STATE"
-+mkdir -p "$SEARCH_STATE/history" "$PIM_STATE"
- export PM_PRIVATE_DIR="$SEARCH_STATE"
- export YANDEX_SEARCH_ENABLED=true YANDEX_SEARCH_MONITOR_ENABLED=true
